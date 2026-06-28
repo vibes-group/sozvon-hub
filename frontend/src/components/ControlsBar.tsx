@@ -27,6 +27,7 @@ type CtrlProps = {
   children: React.ReactNode;
 };
 
+// Tone precedence: danger (red = off) > active (green = on) > neutral (gray).
 function Ctrl({ label, active, danger, onClick, children }: CtrlProps) {
   const tone = danger
     ? 'border-danger text-danger bg-[rgba(248,113,113,0.08)] hover:bg-danger hover:text-accent-ink'
@@ -60,9 +61,6 @@ export function ControlsBar({
 
   return (
     <div className="flex items-center justify-center gap-3 flex-wrap">
-      <Ctrl label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'} active={!selfMuted} onClick={onToggleMic}>
-        {selfMuted ? <MicOff size={20} /> : <Mic size={20} />}
-      </Ctrl>
       <Ctrl label={cameraOn ? 'Выключить камеру' : 'Включить камеру'} active={cameraOn} onClick={onToggleCamera}>
         {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
       </Ctrl>
@@ -73,7 +71,20 @@ export function ControlsBar({
       >
         {sharing ? <ScreenShareOff size={20} /> : <ScreenShare size={20} />}
       </Ctrl>
-      <Ctrl label={deafened ? 'Включить звук' : 'Выключить звук'} active={!deafened} onClick={onToggleDeafen}>
+      <Ctrl
+        label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
+        active={!selfMuted}
+        danger={selfMuted}
+        onClick={onToggleMic}
+      >
+        {selfMuted ? <MicOff size={20} /> : <Mic size={20} />}
+      </Ctrl>
+      <Ctrl
+        label={deafened ? 'Включить звук' : 'Выключить звук'}
+        active={!deafened}
+        danger={deafened}
+        onClick={onToggleDeafen}
+      >
         <Headphones size={20} />
       </Ctrl>
       <Ctrl label="Выйти" active={false} danger onClick={onLeave}>
