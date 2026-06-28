@@ -17,11 +17,11 @@ import {
 } from '../api';
 
 const ERROR_RU: Record<string, string> = {
-  invalid_credentials: 'Неверное имя пользователя или пароль.',
-  invalid_username: 'Недопустимое имя пользователя.',
+  invalid_credentials: 'Неверный логин или пароль.',
+  invalid_username: 'Недопустимый логин.',
   invalid_name: 'Недопустимое имя.',
   invalid_password: 'Пароль должен быть не короче 8 символов.',
-  username_taken: 'Это имя пользователя уже занято.',
+  username_taken: 'Этот логин уже занят.',
   invalid_invite: 'Приглашение недействительно или истекло.',
   invite_required: 'Нужно действительное приглашение.',
   invite_used: 'Приглашение уже использовано.',
@@ -107,7 +107,7 @@ function LoginForm({ onAuthed }: { onAuthed: (u: User) => void }) {
     <form className="card grid gap-4" onSubmit={submit}>
       <h2 className="card-title">Вход</h2>
       <label className="grid gap-1">
-        <span className="section-label">Имя пользователя</span>
+        <span className="section-label">Логин</span>
         <input
           className="input-field"
           value={username}
@@ -170,7 +170,7 @@ function RegisterForm({
       <h2 className="card-title">Регистрация</h2>
       <p className="text-[12px] text-muted-2">Вы приглашены создать аккаунт.</p>
       <label className="grid gap-1">
-        <span className="section-label">Имя пользователя</span>
+        <span className="section-label">Логин</span>
         <input
           className="input-field"
           value={username}
@@ -339,7 +339,7 @@ function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => 
         </div>
       </label>
       <label className="grid gap-1">
-        <span className="section-label">Имя пользователя</span>
+        <span className="section-label">Логин</span>
         <div className="flex gap-2">
           <input
             className="input-field mt-0 flex-1"
@@ -351,7 +351,7 @@ function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => 
           <button
             className="btn btn-secondary shrink-0"
             disabled={!usernameChanged || busy === 'username'}
-            onClick={() => save({ username: username.trim() }, 'username', 'Имя пользователя обновлено.')}
+            onClick={() => save({ username: username.trim() }, 'username', 'Логин обновлён.')}
           >
             {busy === 'username' ? '…' : 'Сохранить'}
           </button>
