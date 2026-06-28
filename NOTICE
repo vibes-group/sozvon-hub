@@ -1,0 +1,7 @@
+sozvon-hub bundles third-party components under frontend/public/vendor/.
+Each retains its own license:
+
+- frontend/public/vendor/rnnoise/  RNNoise WASM upstream (Shiguredo build,
+  @shiguredo/rnnoise-wasm), Apache License 2.0. License file: rnnoise.LICENSE.
+  Includes worklet.js — a build-time bundle of rnnoise.js + our processor
+  (frontend/scripts/bundle-rnnoise.mjs).
