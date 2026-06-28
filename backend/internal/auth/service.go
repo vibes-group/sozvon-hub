@@ -65,6 +65,7 @@ type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Name     string `json:"name"`
+	IsAdmin  bool   `json:"isAdmin"`
 }
 
 type SessionResponse struct {
@@ -298,10 +299,11 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 	}
 
 	var userID, passwordHash, name string
+	var isAdmin bool
 	err = s.db.QueryRowContext(ctx,
-		`select id, password_hash, name from users where username = ? collate nocase and disabled_at is null`,
+		`select id, password_hash, name, is_admin from users where username = ? collate nocase and disabled_at is null`,
 		normalizedUsername,
-	).Scan(&userID, &passwordHash, &name)
+	).Scan(&userID, &passwordHash, &name, &isAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", User{}, ErrInvalidCredentials
 	}
@@ -328,7 +330,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", User{}, fmt.Errorf("insert session: %w", err)
 	}
 
-	return token, User{ID: userID, Username: normalizedUsername, Name: name}, nil
+	return token, User{ID: userID, Username: normalizedUsername, Name: name, IsAdmin: isAdmin}, nil
 }
 
 // UpdateAccount changes the caller's display name and/or username. A nil field is
@@ -377,14 +379,14 @@ func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
 	var sessionID string
 	var lastUsedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		select users.id, users.username, users.name, sessions.id, sessions.last_used_at
+		select users.id, users.username, users.name, users.is_admin, sessions.id, sessions.last_used_at
 		from sessions
 		join users on users.id = sessions.user_id
 		where sessions.token_hash = ?
 		  and sessions.revoked_at is null
 		  and sessions.expires_at > ?
 		  and users.disabled_at is null
-	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &user.Name, &sessionID, &lastUsedAt)
+	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin, &sessionID, &lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotAuthenticated
 	}
@@ -464,9 +466,9 @@ func (s *Service) CookieToken(r *http.Request) string {
 func (s *Service) userByID(ctx context.Context, userID string) (User, error) {
 	var user User
 	err := s.db.QueryRowContext(ctx,
-		`select id, username, name from users where id = ? and disabled_at is null`,
+		`select id, username, name, is_admin from users where id = ? and disabled_at is null`,
 		userID,
-	).Scan(&user.ID, &user.Username, &user.Name)
+	).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin)
 	if err != nil {
 		return User{}, fmt.Errorf("select user: %w", err)
 	}

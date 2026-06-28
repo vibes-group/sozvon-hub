@@ -5,6 +5,7 @@ export type User = {
   id: string;
   username: string;
   name: string;
+  isAdmin: boolean;
 };
 
 export type Invite = {
