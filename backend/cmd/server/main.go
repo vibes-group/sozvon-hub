@@ -61,7 +61,7 @@ func main() {
 	})
 
 	if cfg.BootstrapInvite {
-		invite, err := authService.CreateInvite(ctx, "")
+		invite, err := authService.CreateInvite(ctx, "", false, "")
 		if errors.Is(err, auth.ErrForbidden) {
 			log.Printf("bootstrap invite skipped: users already exist")
 		} else if err != nil {

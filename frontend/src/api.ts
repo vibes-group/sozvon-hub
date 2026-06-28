@@ -127,8 +127,11 @@ export function inviteUrlFromToken(token: string): string {
   return `${window.location.origin}/?invite=${encodeURIComponent(token)}`;
 }
 
-export async function createInvite(): Promise<Invite> {
-  const body = await request<{ invite: Invite }>('POST', '/api/invites');
+export async function createInvite(opts?: {
+  canInvite?: boolean;
+  adminNote?: string;
+}): Promise<Invite> {
+  const body = await request<{ invite: Invite }>('POST', '/api/invites', opts ?? {});
   const invite = body.invite;
   if (!invite.url && invite.token) invite.url = inviteUrlFromToken(invite.token);
   return invite;
@@ -169,11 +172,25 @@ export async function listMyRooms(): Promise<RoomSummary[]> {
 
 // ---- Admin ----
 
-export async function adminListUsers(): Promise<User[]> {
-  const body = await request<{ users: User[] }>('GET', '/api/admin/users');
+export type AdminUserView = {
+  id: string;
+  username: string;
+  name: string;
+  isAdmin: boolean;
+  canInvite: boolean;
+  adminNote: string;
+  createdAt: string;
+  lastSeenAt: string;
+};
+
+export async function adminListUsers(): Promise<AdminUserView[]> {
+  const body = await request<{ users: AdminUserView[] }>('GET', '/api/admin/users');
   return body.users ?? [];
 }
 
-export async function adminSetCanInvite(id: string, canInvite: boolean): Promise<void> {
-  await request<void>('PATCH', `/api/admin/users/${encodeURIComponent(id)}`, { canInvite });
+export async function adminUpdateUser(
+  id: string,
+  patch: { canInvite?: boolean; adminNote?: string },
+): Promise<void> {
+  await request<void>('PATCH', `/api/admin/users/${encodeURIComponent(id)}`, patch);
 }

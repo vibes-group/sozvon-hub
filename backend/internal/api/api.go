@@ -150,13 +150,24 @@ func (d Deps) accountUpdate(w http.ResponseWriter, r *http.Request) {
 
 // --- Invites ---
 
+type inviteCreateRequest struct {
+	CanInvite bool   `json:"canInvite"`
+	AdminNote string `json:"adminNote"`
+}
+
 func (d Deps) inviteCreate(w http.ResponseWriter, r *http.Request) {
 	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
 	if err != nil {
 		writeAuthError(w, err)
 		return
 	}
-	invite, err := d.Auth.CreateInvite(r.Context(), user.ID)
+	// Body is optional — a plain "create" sends none; admins may pass
+	// {canInvite, adminNote} to pre-fill the invitee. Tolerate empty/missing.
+	var body inviteCreateRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
+	}
+	invite, err := d.Auth.CreateInvite(r.Context(), user.ID, body.CanInvite, body.AdminNote)
 	if err != nil {
 		writeAuthError(w, err)
 		return
@@ -275,7 +286,8 @@ func (d Deps) adminUsersList(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminUserUpdateRequest struct {
-	CanInvite *bool `json:"canInvite"`
+	CanInvite *bool   `json:"canInvite"`
+	AdminNote *string `json:"adminNote"`
 }
 
 func (d Deps) adminUserUpdate(w http.ResponseWriter, r *http.Request) {
@@ -286,11 +298,11 @@ func (d Deps) adminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if body.CanInvite == nil {
+	if body.CanInvite == nil && body.AdminNote == nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request"})
 		return
 	}
-	if err := d.Auth.SetCanInvite(r.Context(), r.PathValue("id"), *body.CanInvite); err != nil {
+	if err := d.Auth.AdminUpdateUser(r.Context(), r.PathValue("id"), body.CanInvite, body.AdminNote); err != nil {
 		writeAuthError(w, err)
 		return
 	}
@@ -374,7 +386,7 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "invalid_invite"})
 	case errors.Is(err, auth.ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
-	case err != nil && (err.Error() == "invalid_username" || err.Error() == "invalid_password" || err.Error() == "invalid_name"):
+	case err != nil && (err.Error() == "invalid_username" || err.Error() == "invalid_password" || err.Error() == "invalid_name" || err.Error() == "invalid_note"):
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	default:
 		log.Printf("auth: %v", err)

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
   adminListUsers,
-  adminSetCanInvite,
+  adminUpdateUser,
   ApiError,
   createInvite,
   createRoom,
@@ -14,6 +14,7 @@ import {
   register,
   revokeInvite,
   updateAccount,
+  type AdminUserView,
   type Invite,
   type RoomCreated,
   type RoomSummary,
@@ -289,7 +290,7 @@ function Dashboard({
       </section>
 
       <RoomsCard version={roomsVersion} />
-      {(user.canInvite || user.isAdmin) && <InvitesCard />}
+      {(user.canInvite || user.isAdmin) && <InvitesCard isAdmin={user.isAdmin} />}
       {user.isAdmin && <AdminUsersCard />}
       <ProfileCard user={user} onUpdated={onUserUpdate} />
     </div>
@@ -354,10 +355,16 @@ function RoomsCard({ version }: { version: number }) {
   );
 }
 
+function fmtDateTime(iso: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+}
+
 function AdminUsersCard() {
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<AdminUserView[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -368,56 +375,107 @@ function AdminUsersCard() {
   }, []);
   useEffect(refresh, [refresh]);
 
-  const toggle = useCallback(
-    async (u: User) => {
-      if (busyId) return;
-      setBusyId(u.id);
-      setError(null);
-      try {
-        await adminSetCanInvite(u.id, !u.canInvite);
-        setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, canInvite: !u.canInvite } : x)));
-      } catch (e) {
-        setError(errText(e));
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [busyId],
-  );
+  const patch = useCallback((id: string, p: Partial<AdminUserView>) => {
+    setUsers((prev) => prev.map((x) => (x.id === id ? { ...x, ...p } : x)));
+  }, []);
 
   return (
     <section className="card grid gap-3">
       <h2 className="card-title">Пользователи</h2>
-      <p className="card-hint">Кто может приглашать новых</p>
+      <p className="card-hint">Никнейм виден только вам</p>
       {error && <p className="text-[13px] text-danger">{error}</p>}
       {loaded && users.length === 0 && <p className="text-[13px] text-muted-2">Нет пользователей.</p>}
       {users.length > 0 && (
         <ul className="grid gap-2">
           {users.map((u) => (
-            <li
-              key={u.id}
-              className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
-            >
-              <span className="min-w-0 truncate text-[13px]">
-                <span className="font-medium text-text">{u.username}</span>
-                {u.isAdmin && <span className="text-accent"> · админ</span>}
-              </span>
-              {u.isAdmin ? (
-                <span className="shrink-0 text-[12px] text-muted-2">всегда</span>
-              ) : (
-                <button
-                  className={`btn btn-mini shrink-0 ${u.canInvite ? 'btn-primary' : 'btn-secondary'}`}
-                  disabled={busyId === u.id}
-                  onClick={() => toggle(u)}
-                >
-                  {u.canInvite ? 'Может приглашать' : 'Не может'}
-                </button>
-              )}
-            </li>
+            <AdminUserRow key={u.id} user={u} onPatch={patch} onError={setError} />
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+function AdminUserRow({
+  user: u,
+  onPatch,
+  onError,
+}: {
+  user: AdminUserView;
+  onPatch: (id: string, p: Partial<AdminUserView>) => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [note, setNote] = useState(u.adminNote);
+  const [busy, setBusy] = useState<null | 'note' | 'invite'>(null);
+
+  const saveNote = useCallback(async () => {
+    if (busy || note.trim() === u.adminNote) return;
+    setBusy('note');
+    onError(null);
+    try {
+      await adminUpdateUser(u.id, { adminNote: note.trim() });
+      onPatch(u.id, { adminNote: note.trim() });
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, note, u.adminNote, u.id, onPatch, onError]);
+
+  const toggleInvite = useCallback(async () => {
+    if (busy) return;
+    setBusy('invite');
+    onError(null);
+    try {
+      await adminUpdateUser(u.id, { canInvite: !u.canInvite });
+      onPatch(u.id, { canInvite: !u.canInvite });
+    } catch (e) {
+      onError(errText(e));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, u.canInvite, u.id, onPatch, onError]);
+
+  return (
+    <li className="grid gap-2 border border-line bg-bg-input px-3 py-2.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="min-w-0 truncate text-[13px]">
+          <span className="font-medium text-text">{u.username}</span>
+          {u.isAdmin && <span className="text-accent"> · админ</span>}
+        </span>
+        {u.isAdmin ? (
+          <span className="shrink-0 text-[12px] text-muted-2">приглашает всегда</span>
+        ) : (
+          <button
+            className={`btn btn-mini shrink-0 ${u.canInvite ? 'btn-primary' : 'btn-secondary'}`}
+            disabled={busy === 'invite'}
+            onClick={toggleInvite}
+          >
+            {u.canInvite ? 'Может приглашать' : 'Не может'}
+          </button>
+        )}
+      </div>
+      <div className="text-[11px] text-muted-2">
+        Имя: <span className="text-muted">{u.name || '—'}</span> · рег: {fmtDateTime(u.createdAt)} · вход:{' '}
+        {fmtDateTime(u.lastSeenAt)}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="input-field mt-0 flex-1"
+          value={note}
+          maxLength={100}
+          placeholder="Никнейм (только для вас)"
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <button
+          className="btn btn-secondary btn-mini shrink-0"
+          disabled={busy === 'note' || note.trim() === u.adminNote}
+          onClick={saveNote}
+        >
+          {busy === 'note' ? '…' : 'Сохранить'}
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -495,13 +553,15 @@ function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => 
   );
 }
 
-function InvitesCard() {
+function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshToken, setFreshToken] = useState<Invite | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [grantInvite, setGrantInvite] = useState(false);
+  const [note, setNote] = useState('');
 
   const refresh = useCallback(() => {
     listInvites()
@@ -517,15 +577,19 @@ function InvitesCard() {
     setBusy(true);
     setError(null);
     try {
-      const inv = await createInvite();
+      const inv = await createInvite(
+        isAdmin ? { canInvite: grantInvite, adminNote: note.trim() } : undefined,
+      );
       setFreshToken(inv);
+      setNote('');
+      setGrantInvite(false);
       refresh();
     } catch (err) {
       setError(errText(err));
     } finally {
       setBusy(false);
     }
-  }, [busy, refresh]);
+  }, [busy, refresh, isAdmin, grantInvite, note]);
 
   const handleRevoke = useCallback(
     async (id: string) => {
@@ -554,12 +618,34 @@ function InvitesCard() {
 
   return (
     <section className="card grid gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="card-title">Приглашения</h2>
-        <button className="btn btn-secondary btn-mini" onClick={handleCreate} disabled={busy}>
-          {busy ? '…' : 'Создать'}
+      <h2 className="card-title">Приглашения</h2>
+
+      {isAdmin ? (
+        <div className="grid gap-2 border border-line bg-bg-input p-3">
+          <input
+            className="input-field mt-0"
+            value={note}
+            maxLength={100}
+            placeholder="Никнейм приглашаемого (только для вас)"
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <label className="flex items-center gap-2 text-[13px] text-muted">
+            <input
+              type="checkbox"
+              checked={grantInvite}
+              onChange={(e) => setGrantInvite(e.target.checked)}
+            />
+            Сможет приглашать новых пользователей
+          </label>
+          <button className="btn btn-primary justify-center" onClick={handleCreate} disabled={busy}>
+            {busy ? '…' : 'Создать приглашение'}
+          </button>
+        </div>
+      ) : (
+        <button className="btn btn-primary justify-center" onClick={handleCreate} disabled={busy}>
+          {busy ? '…' : 'Создать приглашение'}
         </button>
-      </div>
+      )}
 
       {error && <p className="text-[13px] text-danger">{error}</p>}
 

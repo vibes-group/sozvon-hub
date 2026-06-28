@@ -111,33 +111,33 @@ func (s *Service) RegisterWithInvite(ctx context.Context, inviteToken, username,
 		return "", User{}, ErrInviteRequired
 	}
 	inviteTokenHash := sha256.Sum256([]byte(inviteToken))
-	return s.createUserSession(ctx, username, password, func(ctx context.Context, tx *sql.Tx, _ string) error {
+	return s.createUserSession(ctx, username, password, func(ctx context.Context, tx *sql.Tx, _ string) (bool, string, error) {
 		now := time.Now().UTC().Format(timeFormat)
-		result, err := tx.ExecContext(ctx, `
+		// Consume the invite and read what it grants in one atomic step.
+		var grant int
+		var note string
+		err := tx.QueryRowContext(ctx, `
 			update account_invites
 			set used_at = ?
 			where token_hash = ?
 			  and used_at is null
 			  and expires_at > ?
-		`, now, inviteTokenHash[:], now)
+			returning grant_can_invite, admin_note
+		`, now, inviteTokenHash[:], now).Scan(&grant, &note)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, "", ErrInvalidInvite
+		}
 		if err != nil {
-			return fmt.Errorf("consume invite: %w", err)
+			return false, "", fmt.Errorf("consume invite: %w", err)
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("invite rows affected: %w", err)
-		}
-		if affected != 1 {
-			return ErrInvalidInvite
-		}
-		return nil
+		return grant == 1, note, nil
 	})
 }
 
 func (s *Service) createUserSession(
 	ctx context.Context,
 	username, password string,
-	beforeInsertUser func(context.Context, *sql.Tx, string) error,
+	prep func(context.Context, *sql.Tx, string) (canInvite bool, adminNote string, err error),
 ) (string, User, error) {
 	normalizedUsername, err := normalizeUsername(username)
 	if err != nil {
@@ -166,15 +166,22 @@ func (s *Service) createUserSession(
 	}
 	defer tx.Rollback()
 
-	if beforeInsertUser != nil {
-		if err := beforeInsertUser(ctx, tx, userID); err != nil {
+	var canInvite bool
+	var adminNote string
+	if prep != nil {
+		canInvite, adminNote, err = prep(ctx, tx, userID)
+		if err != nil {
 			return "", User{}, err
 		}
 	}
 
+	canInviteInt := 0
+	if canInvite {
+		canInviteInt = 1
+	}
 	if _, err := tx.ExecContext(ctx,
-		`insert into users (id, username, name, password_hash) values (?, ?, ?, ?)`,
-		userID, normalizedUsername, normalizedUsername, passwordHash,
+		`insert into users (id, username, name, password_hash, can_invite, admin_note) values (?, ?, ?, ?, ?, ?)`,
+		userID, normalizedUsername, normalizedUsername, passwordHash, canInviteInt, adminNote,
 	); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return "", User{}, ErrUsernameTaken
@@ -194,12 +201,15 @@ func (s *Service) createUserSession(
 		return "", User{}, fmt.Errorf("commit register: %w", err)
 	}
 
-	return token, User{ID: userID, Username: normalizedUsername, Name: normalizedUsername}, nil
+	return token, User{ID: userID, Username: normalizedUsername, Name: normalizedUsername, CanInvite: canInvite}, nil
 }
 
 // CreateInvite mints a one-time registration token. An empty inviterUserID is
 // only allowed to bootstrap the first account, while no users exist.
-func (s *Service) CreateInvite(ctx context.Context, inviterUserID string) (Invite, error) {
+func (s *Service) CreateInvite(ctx context.Context, inviterUserID string, grantCanInvite bool, adminNote string) (Invite, error) {
+	// Only the admin can pre-grant invite rights or attach a private note via the
+	// invite; for everyone else these are forced off/empty.
+	isAdmin := false
 	if inviterUserID == "" {
 		empty, err := s.noUsers(ctx)
 		if err != nil {
@@ -216,6 +226,15 @@ func (s *Service) CreateInvite(ctx context.Context, inviterUserID string) (Invit
 		if !inviter.CanInvite && !inviter.IsAdmin {
 			return Invite{}, ErrForbidden
 		}
+		isAdmin = inviter.IsAdmin
+	}
+	if !isAdmin {
+		grantCanInvite = false
+		adminNote = ""
+	}
+	note, err := normalizeAdminNote(adminNote)
+	if err != nil {
+		return Invite{}, err
 	}
 
 	token, tokenHash, err := newOpaqueToken()
@@ -229,10 +248,14 @@ func (s *Service) CreateInvite(ctx context.Context, inviterUserID string) (Invit
 	if inviterUserID != "" {
 		invitedBy = inviterUserID
 	}
+	grantInt := 0
+	if grantCanInvite {
+		grantInt = 1
+	}
 	if _, err := s.db.ExecContext(ctx, `
-		insert into account_invites (id, token_hash, token, invited_by, expires_at)
-		values (?, ?, ?, ?, ?)
-	`, inviteID, tokenHash[:], token, invitedBy, expiresAt); err != nil {
+		insert into account_invites (id, token_hash, token, invited_by, expires_at, grant_can_invite, admin_note)
+		values (?, ?, ?, ?, ?, ?, ?)
+	`, inviteID, tokenHash[:], token, invitedBy, expiresAt, grantInt, note); err != nil {
 		return Invite{}, fmt.Errorf("insert invite: %w", err)
 	}
 
@@ -299,42 +322,74 @@ func (s *Service) DeleteInvite(ctx context.Context, inviterUserID, inviteID stri
 	return nil
 }
 
-// ListUsers returns every account, for the admin console.
-func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`select id, username, name, is_admin, can_invite from users order by username collate nocase`)
+// AdminUserView is the admin-only projection of an account: it includes the
+// private admin note and activity timestamps that never reach a normal /me.
+type AdminUserView struct {
+	ID         string `json:"id"`
+	Username   string `json:"username"`
+	Name       string `json:"name"`
+	IsAdmin    bool   `json:"isAdmin"`
+	CanInvite  bool   `json:"canInvite"`
+	AdminNote  string `json:"adminNote"`
+	CreatedAt  string `json:"createdAt"`
+	LastSeenAt string `json:"lastSeenAt"`
+}
+
+// ListUsers returns every account for the admin console, with the admin's private
+// note, registration time, and last-seen (latest non-revoked session activity).
+func (s *Service) ListUsers(ctx context.Context) ([]AdminUserView, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select u.id, u.username, u.name, u.is_admin, u.can_invite, u.admin_note, u.created_at,
+		       (select max(coalesce(sx.last_used_at, sx.created_at))
+		          from sessions sx where sx.user_id = u.id and sx.revoked_at is null)
+		from users u
+		order by u.username collate nocase
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
 	defer rows.Close()
-	result := []User{}
+	result := []AdminUserView{}
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Name, &u.IsAdmin, &u.CanInvite); err != nil {
+		var v AdminUserView
+		var lastSeen sql.NullString
+		if err := rows.Scan(&v.ID, &v.Username, &v.Name, &v.IsAdmin, &v.CanInvite, &v.AdminNote, &v.CreatedAt, &lastSeen); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
-		result = append(result, u)
+		if lastSeen.Valid {
+			v.LastSeenAt = lastSeen.String
+		}
+		result = append(result, v)
 	}
 	return result, rows.Err()
 }
 
-// SetCanInvite grants or revokes a user's permission to create invites.
-func (s *Service) SetCanInvite(ctx context.Context, userID string, canInvite bool) error {
+// AdminUpdateUser sets a user's invite permission and/or the admin's private
+// note. A nil field is left unchanged.
+func (s *Service) AdminUpdateUser(ctx context.Context, userID string, canInvite *bool, adminNote *string) error {
 	if userID == "" {
 		return ErrForbidden
 	}
-	v := 0
-	if canInvite {
-		v = 1
+	now := time.Now().UTC().Format(timeFormat)
+	if canInvite != nil {
+		v := 0
+		if *canInvite {
+			v = 1
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`update users set can_invite = ?, updated_at = ? where id = ?`, v, now, userID); err != nil {
+			return fmt.Errorf("set can_invite: %w", err)
+		}
 	}
-	res, err := s.db.ExecContext(ctx,
-		`update users set can_invite = ?, updated_at = ? where id = ?`,
-		v, time.Now().UTC().Format(timeFormat), userID)
-	if err != nil {
-		return fmt.Errorf("set can_invite: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrForbidden
+	if adminNote != nil {
+		note, err := normalizeAdminNote(*adminNote)
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`update users set admin_note = ?, updated_at = ? where id = ?`, note, now, userID); err != nil {
+			return fmt.Errorf("set admin_note: %w", err)
+		}
 	}
 	return nil
 }
@@ -552,6 +607,14 @@ func validateDisplayName(name string) (string, error) {
 		if r < 0x20 || r == 0x7f {
 			return "", errors.New("invalid_name")
 		}
+	}
+	return normalized, nil
+}
+
+func normalizeAdminNote(note string) (string, error) {
+	normalized := strings.TrimSpace(note)
+	if utf8.RuneCountInString(normalized) > 100 {
+		return "", errors.New("invalid_note")
 	}
 	return normalized, nil
 }
