@@ -17,6 +17,8 @@ type Props = {
   onToggleScreenShare: () => void;
   onToggleDeafen: () => void;
   onLeave: () => void;
+  // Hidden on devices without getDisplayMedia (mobile browsers).
+  canScreenShare?: boolean;
 };
 
 type CtrlProps = {
@@ -53,6 +55,7 @@ export function ControlsBar({
   onToggleScreenShare,
   onToggleDeafen,
   onLeave,
+  canScreenShare = true,
 }: Props) {
   const selfMuted = useStore((s) => s.selfMuted);
   const deafened = useStore((s) => s.deafened);
@@ -64,13 +67,15 @@ export function ControlsBar({
       <Ctrl label={cameraOn ? 'Выключить камеру' : 'Включить камеру'} active={cameraOn} onClick={onToggleCamera}>
         {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
       </Ctrl>
-      <Ctrl
-        label={sharing ? 'Остановить показ экрана' : 'Показать экран'}
-        active={sharing}
-        onClick={onToggleScreenShare}
-      >
-        {sharing ? <ScreenShareOff size={20} /> : <ScreenShare size={20} />}
-      </Ctrl>
+      {canScreenShare && (
+        <Ctrl
+          label={sharing ? 'Остановить показ экрана' : 'Показать экран'}
+          active={sharing}
+          onClick={onToggleScreenShare}
+        >
+          {sharing ? <ScreenShareOff size={20} /> : <ScreenShare size={20} />}
+        </Ctrl>
+      )}
       <Ctrl
         label={selfMuted ? 'Включить микрофон' : 'Выключить микрофон'}
         active={!selfMuted}

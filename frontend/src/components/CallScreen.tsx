@@ -15,6 +15,12 @@ import { DeviceSettings } from './DeviceSettings';
 import { ScreenShareSettings } from './ScreenShareSettings';
 import { ScreenShareFocused } from './ScreenShareFocused';
 
+// Mobile browsers (iOS Safari, Android Chrome) don't implement getDisplayMedia,
+// so screen sharing is simply unavailable there — hide the control rather than
+// let it fail confusingly.
+const SCREEN_SHARE_SUPPORTED =
+  typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
 type Props = {
   roomSlug: string;
   displayName: string;
@@ -118,6 +124,10 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   const [shareBusy, setShareBusy] = useState(false);
   const handleToggleScreenShare = useCallback(() => {
     if (shareBusy) return;
+    if (!SCREEN_SHARE_SUPPORTED) {
+      useStore.getState().setStatus('Показ экрана не поддерживается в этом браузере.', true, true);
+      return;
+    }
     const status = useScreenShareStore.getState().myStatus;
     setShareBusy(true);
     const done = () => setShareBusy(false);
@@ -295,6 +305,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             onToggleScreenShare={handleToggleScreenShare}
             onToggleDeafen={handleToggleDeafen}
             onLeave={handleLeave}
+            canScreenShare={SCREEN_SHARE_SUPPORTED}
           />
         </footer>
       </main>
@@ -318,19 +329,32 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
                 <X size={18} />
               </button>
             </div>
+            <section className="card grid gap-3">
+              <h2 className="card-title">Профиль</h2>
+              <label className="grid gap-1.5">
+                <span className="section-label">Ваше имя</span>
+                <input
+                  className="input-field mt-0 text-accent font-medium"
+                  value={name}
+                  maxLength={48}
+                  placeholder="Имя"
+                  onChange={(e) => handleNameChange(e.target.value)}
+                />
+              </label>
+            </section>
             <DeviceSettings
-              name={name}
-              onNameChange={handleNameChange}
               onEngineSelect={handleEngineSelect}
               onMicDeviceSelect={handleMicDeviceSelect}
               onSendVolumeChange={handleSendVolumeChange}
               onOutputVolumeChange={handleOutputVolumeChange}
               onReset={handleReset}
             />
-            <ScreenShareSettings
-              onLiveUpdate={() => void session.updateScreenShareParams()}
-              onShareModeChange={(mode) => void session.changeScreenShareMode(mode)}
-            />
+            {SCREEN_SHARE_SUPPORTED && (
+              <ScreenShareSettings
+                onLiveUpdate={() => void session.updateScreenShareParams()}
+                onShareModeChange={(mode) => void session.changeScreenShareMode(mode)}
+              />
+            )}
           </div>
         </div>
       )}

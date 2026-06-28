@@ -6,8 +6,6 @@ import type { EngineKind } from '../types';
 import { Toggle } from './Toggle';
 
 type Props = {
-  name: string;
-  onNameChange: (name: string) => void;
   onEngineSelect: (engine: EngineKind) => void;
   onMicDeviceSelect: (deviceId: string | null) => void;
   onSendVolumeChange: (v: number) => void;
@@ -78,8 +76,6 @@ function Select({
 }
 
 export function DeviceSettings({
-  name,
-  onNameChange,
   onEngineSelect,
   onMicDeviceSelect,
   onSendVolumeChange,
@@ -108,22 +104,11 @@ export function DeviceSettings({
   return (
     <section className="card grid gap-5">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="card-title">Настройки</h2>
+        <h2 className="card-title">Звук и устройства</h2>
         <button type="button" onClick={onReset} className="btn btn-secondary btn-mini">
           Сбросить
         </button>
       </div>
-
-      <label className="grid gap-1.5">
-        <span className="section-label">Ваше имя</span>
-        <input
-          className="input-field mt-0 text-accent font-medium"
-          value={name}
-          maxLength={48}
-          placeholder="Имя"
-          onChange={(e) => onNameChange(e.target.value)}
-        />
-      </label>
 
       <div className="grid gap-2">
         <SliderHead label="Громкость микрофона" value={`${sendVolume}%`} />

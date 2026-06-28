@@ -438,8 +438,20 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
       useCameraStore.getState().setSelfStream(null);
       getStore().setCameraOn(false);
       const name = errorName(err);
+      if (!navigator.mediaDevices?.getUserMedia || name === 'NotSupportedError' || name === 'TypeError') {
+        getStore().setStatus(
+          'Камера недоступна в этом браузере. Откройте сайт в Safari или Chrome, а не во встроенном браузере мессенджера.',
+          true,
+          true,
+        );
+        return;
+      }
       if (name === 'NotAllowedError' || name === 'AbortError') {
-        getStore().setStatus('Доступ к камере не разрешён. Разрешите камеру в настройках браузера.', true, true);
+        getStore().setStatus(
+          'Доступ к камере не разрешён. Разрешите камеру для сайта в настройках браузера.',
+          true,
+          true,
+        );
         return;
       }
       if (name === 'NotFoundError' || name === 'OverconstrainedError') {

@@ -110,7 +110,7 @@ export const SCREEN_PRESETS: readonly ScreenPreset[] = [
   { id: 'screenshare', label: 'Демонстрация', resolution: 'source', fps: 60, shareMode: 'sharp' },
 ] as const;
 
-export const DEFAULT_SCREEN_MODE: ScreenMode = 'gaming';
+export const DEFAULT_SCREEN_MODE: ScreenMode = 'screenshare';
 
 export function isScreenMode(v: unknown): v is ScreenMode {
   return v === 'gaming' || v === 'screenshare' || v === 'custom';
