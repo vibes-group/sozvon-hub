@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { Mic, MicOff, ScreenShare, Video, Volume2, VolumeX } from 'lucide-react';
-import { selectParticipants, useStore } from '../store/useStore';
+import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
+import { useScreenShareStore } from '../store/useScreenShareStore';
 import { useCameraStore } from '../store/useCameraStore';
 import { loadPeerVolume, savePeerVolume } from '../utils/storage';
 import type { ParticipantUI } from '../types';
+import { ScreenShareTile } from './ScreenShareTile';
 
 function gridColumns(count: number): string {
   if (count <= 1) return 'grid-cols-1';
@@ -12,15 +14,61 @@ function gridColumns(count: number): string {
   return 'grid-cols-4';
 }
 
-export function ParticipantGrid({ onLocalAudioChange }: { onLocalAudioChange: () => void }) {
+export function ParticipantGrid({
+  onLocalAudioChange,
+  onScreenTileClick,
+}: {
+  onLocalAudioChange: () => void;
+  onScreenTileClick: (publisherId: string) => void;
+}) {
   const participants = useStore(selectParticipants);
-  const cols = gridColumns(participants.length);
+  const selfId = useStore(selectSelfPeerId);
+  const shares = useScreenShareStore((s) => s.shares);
+  const myStream = useScreenShareStore((s) => s.myStream);
+  const myStatus = useScreenShareStore((s) => s.myStatus);
 
+  const otherShares = Array.from(shares.values()).filter((sh) => sh.publisherId !== selfId);
+  const showSelfShare = myStatus === 'publishing' && !!myStream;
+  const cols = gridColumns(otherShares.length + (showSelfShare ? 1 : 0) + participants.length);
+
+  // Screen shares lead the grid so the demo is the first thing the eye lands on.
   return (
     <div className={`grid gap-3 ${cols} content-start`}>
+      {showSelfShare && myStream && <SelfScreenTile stream={myStream} />}
+      {otherShares.map((sh) => (
+        <ScreenShareTile
+          key={`screen-${sh.publisherId}`}
+          publisherId={sh.publisherId}
+          hasSystemAudio={sh.hasSystemAudio}
+          onClick={() => onScreenTileClick(sh.publisherId)}
+        />
+      ))}
       {participants.map((p) => (
         <CameraTile key={p.id} participant={p} onLocalAudioChange={onLocalAudioChange} />
       ))}
+    </div>
+  );
+}
+
+// Live preview of our own screen capture — rendered straight from the local
+// MediaStream (no SFU round-trip), muted to avoid system-audio feedback.
+function SelfScreenTile({ stream }: { stream: MediaStream }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.srcObject = stream;
+    el.muted = true;
+    el.play().catch(() => {});
+  }, [stream]);
+
+  return (
+    <div className="relative aspect-video overflow-hidden border border-accent bg-black">
+      <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-2.5 py-1.5 text-white">
+        <ScreenShare size={14} className="text-accent" />
+        <span className="truncate text-[13px] font-medium">Ваш экран</span>
+      </div>
     </div>
   );
 }

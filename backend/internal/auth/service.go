@@ -470,6 +470,46 @@ func (s *Service) UpdateAccount(ctx context.Context, userID string, newUsername,
 	return s.userByID(ctx, userID)
 }
 
+// ChangePassword verifies the caller's current password and replaces it.
+// Returns ErrInvalidCredentials when the current password is wrong and
+// "invalid_password" when the new one fails policy.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	if userID == "" {
+		return ErrForbidden
+	}
+	var passwordHash string
+	err := s.db.QueryRowContext(ctx,
+		`select password_hash from users where id = ? and disabled_at is null`, userID,
+	).Scan(&passwordHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return fmt.Errorf("select password: %w", err)
+	}
+	ok, err := VerifyPassword(currentPassword, passwordHash)
+	if err != nil {
+		return fmt.Errorf("verify password: %w", err)
+	}
+	if !ok {
+		return ErrInvalidCredentials
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	newHash, err := HashPassword(newPassword, s.cfg.PasswordParams)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	now := time.Now().UTC().Format(timeFormat)
+	if _, err := s.db.ExecContext(ctx,
+		`update users set password_hash = ?, updated_at = ? where id = ?`, newHash, now, userID,
+	); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
 	if token == "" {
 		return User{}, ErrNotAuthenticated

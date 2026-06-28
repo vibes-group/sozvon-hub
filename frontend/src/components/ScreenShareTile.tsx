@@ -8,24 +8,23 @@ type Props = {
 };
 
 export function ScreenShareTile({ publisherId, hasSystemAudio, onClick }: Props) {
-  const display = useStore(
-    (s) => s.participants[publisherId]?.display ?? `user-${publisherId}`,
-  );
+  const display = useStore((s) => s.participants[publisherId]?.display ?? `user-${publisherId}`);
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-center justify-center gap-2
-        rounded-md border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60
-        p-4 transition aspect-video text-zinc-200"
+      className="group relative flex aspect-video flex-col items-center justify-center gap-2
+        border border-line bg-bg-2 text-muted transition-colors hover:border-accent hover:text-accent"
     >
-      <ScreenShare size={28} strokeWidth={2} className="text-emerald-400" />
-      <span className="text-sm font-medium truncate max-w-full">{display}</span>
-      <span className="flex items-center gap-1 text-xs text-zinc-400">
-        Шарит экран
-        {hasSystemAudio && <Volume2 size={12} strokeWidth={2.25} />}
+      <ScreenShare size={26} strokeWidth={2} className="text-accent" />
+      <span className="text-[12px] uppercase tracking-[0.12em] text-muted-2 group-hover:text-accent">
+        Открыть экран
       </span>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 to-transparent px-2.5 py-1.5 text-white">
+        <span className="truncate text-[13px] font-medium">{display}</span>
+        {hasSystemAudio && <Volume2 size={14} className="shrink-0" />}
+      </div>
     </button>
   );
 }

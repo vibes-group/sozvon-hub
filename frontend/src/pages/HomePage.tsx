@@ -4,6 +4,7 @@ import {
   adminListUsers,
   adminUpdateUser,
   ApiError,
+  changePassword,
   createInvite,
   createRoom,
   fetchMe,
@@ -68,8 +69,10 @@ export default function HomePage() {
   return (
     <main className="min-h-dvh bg-bg-0 text-body px-4 py-10 grid place-items-center">
       <div className="w-full max-w-md grid gap-6">
-        <header className="text-center grid gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-text">sozvon-hub</h1>
+        <header className="text-center grid gap-1.5">
+          <h1 className="text-2xl font-extrabold uppercase tracking-[0.2em] text-accent">
+            Sozvon&nbsp;Hub
+          </h1>
           <p className="text-[13px] text-muted-2">Быстрые видеозвонки по ссылке</p>
         </header>
 
@@ -248,6 +251,7 @@ function RoomsCard() {
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<RoomCreated | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(() => {
     listMyRooms()
@@ -256,6 +260,12 @@ function RoomsCard() {
       .finally(() => setLoaded(true));
   }, []);
   useEffect(refresh, [refresh]);
+
+  // Keep the relative "истекает через …" labels fresh without a reload.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const create = useCallback(async () => {
     if (busy) return;
@@ -304,6 +314,11 @@ function RoomsCard() {
               {copied === 'fresh' ? 'Скопировано' : 'Копировать'}
             </button>
           </div>
+          {fresh.expiresAt && (
+            <p className="text-[12px] text-muted-2">
+              Действует до {fmtDateTime(fresh.expiresAt)}, пока никто не зашёл.
+            </p>
+          )}
         </div>
       )}
 
@@ -319,7 +334,11 @@ function RoomsCard() {
                 <a href={r.url} className="text-accent underline underline-offset-2">
                   {r.slug}
                 </a>
-                <span className="text-muted-2"> · {r.status === 'active' ? 'идёт' : 'ожидает'}</span>
+                {(() => {
+                  if (r.status === 'active') return <span className="text-muted-2"> · идёт</span>;
+                  const tail = expiryTail(r.expiresAt, now);
+                  return <span className="text-muted-2"> · ожидает{tail ? ` · ${tail}` : ''}</span>;
+                })()}
               </span>
               <button className="btn btn-secondary btn-mini shrink-0" onClick={() => copy(r.slug, r.url)}>
                 {copied === r.slug ? 'Скопировано' : 'Копировать'}
@@ -337,6 +356,21 @@ function fmtDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+// Relative time left until a pending link expires, e.g. "истекает через 23 ч".
+// Returns '' when there's nothing meaningful to show (no/invalid date).
+function expiryTail(iso: string | undefined, now: number): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const ms = t - now;
+  if (ms <= 60_000) return 'истекает';
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `истекает через ${min} мин`;
+  const h = Math.floor(min / 60);
+  const rem = min % 60;
+  return rem ? `истекает через ${h} ч ${rem} мин` : `истекает через ${h} ч`;
 }
 
 function AdminUsersCard() {
@@ -459,8 +493,26 @@ function AdminUserRow({
 function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => void }) {
   const [name, setName] = useState(user.name);
   const [username, setUsername] = useState(user.username);
-  const [busy, setBusy] = useState<null | 'name' | 'username'>(null);
+  const [busy, setBusy] = useState<null | 'name' | 'username' | 'password'>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [curPw, setCurPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+
+  const savePassword = useCallback(async () => {
+    if (busy) return;
+    setBusy('password');
+    setMsg(null);
+    try {
+      await changePassword(curPw, newPw);
+      setCurPw('');
+      setNewPw('');
+      setMsg({ text: 'Пароль обновлён.', ok: true });
+    } catch (err) {
+      setMsg({ text: errText(err), ok: false });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, curPw, newPw]);
 
   const save = useCallback(
     async (patch: { name?: string; username?: string }, which: 'name' | 'username', okText: string) => {
@@ -525,6 +577,36 @@ function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => 
           </button>
         </div>
       </label>
+
+      <div className="grid gap-2 border-t border-line pt-4">
+        <span className="section-label">Сменить пароль</span>
+        <input
+          className="input-field mt-0"
+          type="password"
+          value={curPw}
+          autoComplete="current-password"
+          placeholder="Текущий пароль"
+          onChange={(e) => setCurPw(e.target.value)}
+        />
+        <div className="flex gap-2">
+          <input
+            className="input-field mt-0 flex-1"
+            type="password"
+            value={newPw}
+            autoComplete="new-password"
+            placeholder="Новый пароль (от 8 символов)"
+            onChange={(e) => setNewPw(e.target.value)}
+          />
+          <button
+            className="btn btn-secondary shrink-0"
+            disabled={busy === 'password' || !curPw || newPw.length < 8}
+            onClick={savePassword}
+          >
+            {busy === 'password' ? '…' : 'Сменить'}
+          </button>
+        </div>
+      </div>
+
       {msg && <p className={`text-[13px] ${msg.ok ? 'text-good' : 'text-danger'}`}>{msg.text}</p>}
     </section>
   );

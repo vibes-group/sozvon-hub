@@ -23,6 +23,7 @@ type Config struct {
 	SessionTTL time.Duration
 	InviteTTL  time.Duration
 	RoomTTL    time.Duration
+	RoomGrace  time.Duration
 
 	TurnPort     uint16
 	UDPPortMin   uint16
@@ -48,6 +49,7 @@ func Load() Config {
 		SessionTTL: time.Duration(envInt64("AUTH_SESSION_TTL_HOURS", 720)) * time.Hour,
 		InviteTTL:  time.Duration(envInt64("AUTH_INVITE_TTL_HOURS", 168)) * time.Hour,
 		RoomTTL:    time.Duration(envInt64("ROOM_TTL_HOURS", 24)) * time.Hour,
+		RoomGrace:  time.Duration(envInt64("ROOM_GRACE_MINUTES", 5)) * time.Minute,
 
 		TurnPort:     envUint16("TURN_PORT", 3478),
 		UDPPortMin:   envUint16("UDP_PORT_MIN", 10101),

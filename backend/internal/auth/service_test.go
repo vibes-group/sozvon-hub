@@ -97,6 +97,36 @@ func TestRegisterWithInvite(t *testing.T) {
 	}
 }
 
+func TestChangePassword(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	invite, _ := svc.CreateInvite(ctx, "", false, "")
+	_, user, err := svc.RegisterWithInvite(ctx, invite.Token, "alice", "password123")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Wrong current password is rejected.
+	if err := svc.ChangePassword(ctx, user.ID, "wrong-password", "newpassword456"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+	// New password that fails policy is rejected.
+	if err := svc.ChangePassword(ctx, user.ID, "password123", "short"); err == nil || err.Error() != "invalid_password" {
+		t.Fatalf("expected invalid_password, got %v", err)
+	}
+	// Correct current + valid new password succeeds.
+	if err := svc.ChangePassword(ctx, user.ID, "password123", "newpassword456"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	// Old password no longer logs in; the new one does.
+	if _, _, err := svc.Login(ctx, "alice", "password123"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("old password should fail, got %v", err)
+	}
+	if _, _, err := svc.Login(ctx, "alice", "newpassword456"); err != nil {
+		t.Fatalf("login with new password: %v", err)
+	}
+}
+
 func TestRegisterEmptyTokenRequiresInvite(t *testing.T) {
 	svc, _ := newTestService(t)
 	if _, _, err := svc.RegisterWithInvite(context.Background(), "", "alice", "password123"); !errors.Is(err, ErrInviteRequired) {

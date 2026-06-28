@@ -179,6 +179,25 @@ func (s *Store) sweep(now time.Time) {
 	}
 }
 
+// DeleteRoom removes every entry belonging to roomID and deletes their backing
+// files. Called when a room ends so attachments never outlive the call.
+func (s *Store) DeleteRoom(roomID string) {
+	s.mu.Lock()
+	var stale []string
+	for id, entry := range s.entries {
+		if entry.RoomID == roomID {
+			stale = append(stale, entry.TempPath)
+			s.totalSize -= entry.Size
+			delete(s.entries, id)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, path := range stale {
+		_ = os.Remove(path)
+	}
+}
+
 func (s *Store) janitor() {
 	defer close(s.janitorDone)
 	ticker := time.NewTicker(s.cfg.JanitorInterval)

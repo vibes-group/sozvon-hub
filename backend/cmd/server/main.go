@@ -21,6 +21,7 @@ import (
 	"sozvon-hub/backend/internal/auth"
 	"sozvon-hub/backend/internal/config"
 	"sozvon-hub/backend/internal/db"
+	"sozvon-hub/backend/internal/filestore"
 	"sozvon-hub/backend/internal/rooms"
 	turnsrv "sozvon-hub/backend/internal/turn"
 	"sozvon-hub/backend/internal/web"
@@ -83,6 +84,22 @@ func main() {
 		nat1To1 = []string{cfg.PublicIP}
 	}
 
+	// Transient chat-attachment store. Files live on disk only long enough for
+	// the call; they're deleted when the room ends (rooms.Manager) and TTL-swept
+	// as a backstop. The per-upload cap mirrors the frontend's MAX_UPLOAD_BYTES.
+	fileStore, err := filestore.New(filestore.Config{
+		TempDir:         filepath.Join(dataDir, "uploads"),
+		TTL:             2 * time.Hour,
+		TTLHardCap:      cfg.RoomTTL,
+		MaxUploadBytes:  100 * 1024 * 1024,
+		MaxTotalBytes:   2 * 1024 * 1024 * 1024,
+		JanitorInterval: time.Minute,
+	})
+	if err != nil {
+		log.Fatalf("filestore: %v", err)
+	}
+	defer fileStore.Close()
+
 	roomManager := rooms.NewManager(database, rooms.Config{
 		ICEServers:    iceServers,
 		NAT1To1IPs:    nat1To1,
@@ -90,7 +107,9 @@ func main() {
 		UDPPortMax:    cfg.UDPPortMax,
 		AppHostname:   cfg.AppHostname,
 		RoomTTL:       cfg.RoomTTL,
+		GracePeriod:   cfg.RoomGrace,
 		SweepInterval: time.Minute,
+		FileStore:     fileStore,
 	})
 	sweepCtx, sweepCancel := context.WithCancel(ctx)
 	defer sweepCancel()
@@ -116,6 +135,7 @@ func main() {
 	mux := api.Routes(api.Deps{
 		Auth:             authService,
 		Rooms:            roomManager,
+		FileStore:        fileStore,
 		StunURL:          stunURL,
 		TurnURL:          turnURL,
 		TurnSharedSecret: turnSharedSecret,

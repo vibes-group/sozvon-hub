@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { fetchRoom, fetchMe, updateAccount, type User } from '../api';
-import { loadDisplayName, saveDisplayName } from '../utils/storage';
+import { loadDisplayName, saveDisplayName, makeGuestName } from '../utils/storage';
 import { CallScreen } from '../components/CallScreen';
 
 type LoadState =
@@ -15,6 +15,9 @@ export default function RoomPage() {
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [name, setName] = useState<string>(() => loadDisplayName());
+  // Generated once so it stays put across keystrokes; shown as the placeholder
+  // and used verbatim if the field is left blank — what you see is what you get.
+  const [guestName] = useState(makeGuestName);
   const [account, setAccount] = useState<User | null>(null);
   const [joined, setJoined] = useState(false);
 
@@ -56,15 +59,16 @@ export default function RoomPage() {
   }, []);
 
   const handleJoin = useCallback(() => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
+    // Name is optional: a blank entry uses the placeholder guest name.
+    const finalName = name.trim() || guestName;
     // Always cache locally (covers guests); persist to the account when changed.
-    saveDisplayName(trimmed);
-    if (account && trimmed !== account.name) {
-      void updateAccount({ name: trimmed }).catch(() => {});
+    saveDisplayName(finalName);
+    if (account && finalName !== account.name) {
+      void updateAccount({ name: finalName }).catch(() => {});
     }
+    if (finalName !== name) setName(finalName);
     setJoined(true);
-  }, [name, account]);
+  }, [name, guestName, account]);
 
   const handleLeave = useCallback(() => {
     navigate('/');
@@ -112,22 +116,21 @@ export default function RoomPage() {
             <label className="grid gap-1">
               <span className="section-label">Ваше имя</span>
               <input
-                className="input-field"
+                className="input-field text-accent font-medium"
                 value={name}
                 autoFocus
                 maxLength={48}
-                placeholder="Как вас представить"
+                placeholder={guestName}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleJoin();
                 }}
               />
             </label>
-            <button
-              className="btn btn-primary justify-center"
-              disabled={!name.trim()}
-              onClick={handleJoin}
-            >
+            <p className="-mt-2 text-[12px] text-muted-2">
+              Можно не вводить — будете «{guestName}»
+            </p>
+            <button className="btn btn-primary justify-center" onClick={handleJoin}>
               Присоединиться
             </button>
             <Link

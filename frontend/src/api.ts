@@ -120,6 +120,15 @@ export async function updateAccount(patch: {
   return body.user;
 }
 
+// Change the caller's password. Throws ApiError 'invalid_credentials' when the
+// current password is wrong, 'invalid_password' when the new one is too short.
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await request<void>('POST', '/api/account/password', { currentPassword, newPassword });
+}
+
 // ---- Invites ----
 
 // Builds the registration link from a token when the backend omits `url`.

@@ -171,6 +171,35 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+
+  /* Square toggle — sharp, 48x24, green when on, dark square dot slides. */
+  .vh-toggle {
+    @apply relative inline-block w-12 h-6 shrink-0 cursor-pointer
+      bg-bg-0 border border-line transition-[color,background-color,border-color,filter] duration-150;
+  }
+  .vh-toggle:hover {
+    border-color: var(--color-accent);
+  }
+  .vh-toggle[data-checked='true']:hover {
+    filter: brightness(1.2);
+  }
+  .vh-toggle-dot {
+    @apply absolute left-[3px] w-4 h-4 bg-muted-2
+      transition-[transform,background] duration-150;
+    top: calc(50% - 8px);
+  }
+  .vh-toggle[data-checked='true'] {
+    background-color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .vh-toggle[data-checked='true'] .vh-toggle-dot {
+    transform: translateX(24px);
+    background-color: var(--color-bg-0);
+  }
+  .vh-toggle:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
 }
 
 @keyframes fadeIn {

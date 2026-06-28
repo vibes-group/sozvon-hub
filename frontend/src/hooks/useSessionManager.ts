@@ -14,11 +14,12 @@ import { useAudioEngine } from './useAudioEngine';
 import { preloadEngine, isEngineReady, formatEngine } from '../audio/engine';
 import { useSFU } from './useSFU';
 import { saveDisplayName, loadOrCreateClientId } from '../utils/storage';
-import type { ChatPayload, ChatDeletedPayload } from '../sfu/protocol';
+import type { ChatPayload, ChatDeletedPayload, Attachment } from '../sfu/protocol';
 import type { ShareMode } from '../screenshare/params';
 import { SCREEN_SHARE_NO_CODEC } from '../sfu/client';
 import { loadAppConfig, buildWsUrl } from '../config';
 import { createReconnectScheduler } from '../utils/reconnect';
+import { errorName } from '../utils/mediaError';
 import { buildSFUHandlers } from './sfu-handlers';
 import type { EngineKind, ParticipantUI } from '../types';
 import type { MicGraph } from '../audio/mic-graph';
@@ -124,8 +125,8 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
   );
 
   const sendChat = useCallback(
-    (text: string, clientMsgId: string): void => {
-      sfu.getClient()?.sendChat({ text, clientMsgId });
+    (text: string, clientMsgId: string, attachments?: Attachment[]): void => {
+      sfu.getClient()?.sendChat({ text, clientMsgId, attachments });
     },
     [sfu],
   );
@@ -150,6 +151,7 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
       pending: false,
       senderName: data.senderName ?? sender?.display,
       senderClientId: sender?.clientId,
+      attachments: data.attachments,
     });
   }, []);
 
@@ -408,7 +410,11 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
         : base;
       return await navigator.mediaDevices.getUserMedia({ video, audio: false });
     } catch (err) {
-      if (deviceId && err instanceof Error && err.name === 'OverconstrainedError') {
+      // A camDeviceId saved on another device won't exist here; the exact
+      // constraint then fails without ever prompting. Drop it and retry with
+      // the default camera so the permission prompt actually appears.
+      // OverconstrainedError is NOT an Error subclass in browsers, so match by name.
+      if (deviceId && errorName(err) === 'OverconstrainedError') {
         useStore.getState().setCamDeviceId(null);
         return await navigator.mediaDevices.getUserMedia({ video: base, audio: false });
       }
@@ -431,9 +437,13 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
     } catch (err) {
       useCameraStore.getState().setSelfStream(null);
       getStore().setCameraOn(false);
-      const name = err instanceof DOMException ? err.name : '';
+      const name = errorName(err);
       if (name === 'NotAllowedError' || name === 'AbortError') {
-        getStore().setStatus('Доступ к камере не разрешён.', true, true);
+        getStore().setStatus('Доступ к камере не разрешён. Разрешите камеру в настройках браузера.', true, true);
+        return;
+      }
+      if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        getStore().setStatus('Камера не найдена.', true, true);
         return;
       }
       getStore().setStatus(

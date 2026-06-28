@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -172,6 +173,106 @@ func TestSweep(t *testing.T) {
 	}
 	if got := statusOf(t, database, fresh.Slug); got != "active" {
 		t.Fatalf("expected active room untouched, got %q", got)
+	}
+}
+
+// stubRoom stands in for *sfu.Room so grace/teardown can be tested without a
+// real SFU. fakeTimer captures the grace callback so the test fires it on demand
+// instead of waiting wall-clock minutes.
+type stubRoom struct{ closed int }
+
+func (s *stubRoom) ServeWS(http.ResponseWriter, *http.Request) {}
+func (s *stubRoom) Close()                                     { s.closed++ }
+
+type fakeTimer struct {
+	fn      func()
+	stopped bool
+}
+
+func (f *fakeTimer) Stop() bool {
+	was := !f.stopped
+	f.stopped = true
+	return was
+}
+
+// emptyLiveRoom seeds m.live with a stub room holding one peer for an existing
+// DB row, and captures every grace timer the manager schedules.
+func emptyLiveRoom(t *testing.T, m *Manager) (slug string, room *stubRoom, timers *[]*fakeTimer) {
+	t.Helper()
+	info, err := m.Create(context.Background(), creator)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	setStatus(t, m.db, info.Slug, "active")
+	room = &stubRoom{}
+	captured := []*fakeTimer{}
+	timers = &captured
+	m.afterFunc = func(_ time.Duration, fn func()) stoppable {
+		ft := &fakeTimer{fn: fn}
+		captured = append(captured, ft)
+		*timers = captured
+		return ft
+	}
+	m.live[info.Slug] = &liveRoom{room: room, peers: map[string]struct{}{"p1": {}}}
+	return info.Slug, room, timers
+}
+
+func TestGracePeriodEndsEmptyRoom(t *testing.T) {
+	m, database, _ := newTestManager(t)
+	slug, room, timers := emptyLiveRoom(t, m)
+
+	m.peerLeft(slug, "p1")
+
+	// Room is kept alive during grace: not closed, still active, still live.
+	if room.closed != 0 {
+		t.Fatalf("room closed during grace window (closed=%d)", room.closed)
+	}
+	if got := statusOf(t, database, slug); got != "active" {
+		t.Fatalf("status during grace = %q, want active", got)
+	}
+	if _, ok := m.live[slug]; !ok {
+		t.Fatal("room dropped from live set during grace")
+	}
+	if len(*timers) != 1 {
+		t.Fatalf("expected 1 grace timer scheduled, got %d", len(*timers))
+	}
+
+	// Grace lapses with the room still empty → tear down and end the link.
+	(*timers)[0].fn()
+	if room.closed != 1 {
+		t.Fatalf("room not closed after grace (closed=%d)", room.closed)
+	}
+	if got := statusOf(t, database, slug); got != "ended" {
+		t.Fatalf("status after grace = %q, want ended", got)
+	}
+	if _, ok := m.live[slug]; ok {
+		t.Fatal("ended room still in live set")
+	}
+}
+
+func TestReconnectCancelsGrace(t *testing.T) {
+	m, database, _ := newTestManager(t)
+	slug, room, timers := emptyLiveRoom(t, m)
+
+	m.peerLeft(slug, "p1")
+	grace := (*timers)[0]
+
+	// A reconnect arrives before grace lapses.
+	m.peerJoined(slug, "p2")
+	if !grace.stopped {
+		t.Fatal("grace timer not stopped on reconnect")
+	}
+
+	// A late-firing stale timer must not tear down the now-occupied room.
+	grace.fn()
+	if room.closed != 0 {
+		t.Fatalf("room closed despite reconnect (closed=%d)", room.closed)
+	}
+	if got := statusOf(t, database, slug); got != "active" {
+		t.Fatalf("status after reconnect = %q, want active", got)
+	}
+	if _, ok := m.live[slug]; !ok {
+		t.Fatal("room dropped from live set after reconnect")
 	}
 }
 

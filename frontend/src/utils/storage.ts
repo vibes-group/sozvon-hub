@@ -62,6 +62,28 @@ export function saveDisplayName(name: string): void {
   localStorage.setItem(KEYS.displayName, name.trim());
 }
 
+// Adjectives and animals are both masculine so "{adj} {animal}" always agrees in
+// gender — keeps the generated name grammatical without per-word logic.
+const GUEST_ADJECTIVES = [
+  'Храбрый', 'Весёлый', 'Хитрый', 'Быстрый', 'Добрый', 'Смелый', 'Лохматый',
+  'Сонный', 'Бодрый', 'Рыжий', 'Тихий', 'Шумный', 'Мудрый', 'Ловкий', 'Грозный',
+  'Пушистый', 'Дерзкий', 'Важный', 'Озорной', 'Лунный',
+];
+const GUEST_ANIMALS = [
+  'Барсук', 'Тигр', 'Волк', 'Ёж', 'Лис', 'Кит', 'Сокол', 'Бобр', 'Енот', 'Морж',
+  'Жираф', 'Дельфин', 'Пингвин', 'Краб', 'Шмель', 'Филин', 'Барс', 'Як', 'Лось', 'Крот',
+];
+
+function pick<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// A friendly, readable guest name like "Хитрый Барсук" for users who join
+// without typing a name.
+export function makeGuestName(): string {
+  return `${pick(GUEST_ADJECTIVES)} ${pick(GUEST_ANIMALS)}`;
+}
+
 // Stable client identifier, generated once on first launch and persisted.
 // Sent in every `hello` so peers can key per-peer UI prefs by something that
 // survives reconnects (peer IDs are ephemeral per WS).

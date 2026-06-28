@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { ENGINE_OPTIONS } from '../audio/engine';
+import { ENGINE_OPTIONS, type ActiveEngineKind } from '../audio/engine';
 import type { EngineKind } from '../types';
+import { Toggle } from './Toggle';
 
 type Props = {
+  name: string;
+  onNameChange: (name: string) => void;
   onEngineSelect: (engine: EngineKind) => void;
   onMicDeviceSelect: (deviceId: string | null) => void;
+  onSendVolumeChange: (v: number) => void;
   onOutputVolumeChange: (v: number) => void;
+  onReset: () => void;
 };
 
 function useDevices(kind: MediaDeviceKind): MediaDeviceInfo[] {
@@ -31,26 +37,154 @@ function useDevices(kind: MediaDeviceKind): MediaDeviceInfo[] {
   return devices;
 }
 
-export function DeviceSettings({ onEngineSelect, onMicDeviceSelect, onOutputVolumeChange }: Props) {
+function SliderHead({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between items-center text-[13px] font-bold uppercase tracking-[0.18em]">
+      <span className="text-muted">{label}</span>
+      <span className="text-accent tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function Select({
+  value,
+  ariaLabel,
+  onChange,
+  children,
+}: {
+  value: string;
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none w-full pl-3 pr-9 py-2.5 text-[13px]
+          bg-bg-input border border-line text-muted cursor-pointer
+          hover:border-muted-2 focus:outline-none focus:border-accent transition-colors"
+      >
+        {children}
+      </select>
+      <ChevronDown
+        size={16}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-2 pointer-events-none"
+      />
+    </div>
+  );
+}
+
+export function DeviceSettings({
+  name,
+  onNameChange,
+  onEngineSelect,
+  onMicDeviceSelect,
+  onSendVolumeChange,
+  onOutputVolumeChange,
+  onReset,
+}: Props) {
   const engine = useStore((s) => s.engine);
+  const sendVolume = useStore((s) => s.sendVolume);
+  const outputVolume = useStore((s) => s.outputVolume);
   const micDeviceId = useStore((s) => s.micDeviceId);
   const camDeviceId = useStore((s) => s.camDeviceId);
   const setCamDeviceId = useStore((s) => s.setCamDeviceId);
-  const outputVolume = useStore((s) => s.outputVolume);
+
+  // Remember the last denoiser variant so flipping the switch off and on again
+  // restores the chosen algorithm instead of resetting to a default.
+  const [lastVariant, setLastVariant] = useState<ActiveEngineKind>(
+    engine === 'off' ? 'rnnoise' : engine,
+  );
+  useEffect(() => {
+    if (engine !== 'off') setLastVariant(engine);
+  }, [engine]);
 
   const mics = useDevices('audioinput');
   const cams = useDevices('videoinput');
 
   return (
-    <section className="card grid gap-4">
-      <h2 className="card-title">Настройки</h2>
+    <section className="card grid gap-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="card-title">Настройки</h2>
+        <button type="button" onClick={onReset} className="btn btn-secondary btn-mini">
+          Сбросить
+        </button>
+      </div>
 
-      <label className="grid gap-1">
+      <label className="grid gap-1.5">
+        <span className="section-label">Ваше имя</span>
+        <input
+          className="input-field mt-0 text-accent font-medium"
+          value={name}
+          maxLength={48}
+          placeholder="Имя"
+          onChange={(e) => onNameChange(e.target.value)}
+        />
+      </label>
+
+      <div className="grid gap-2">
+        <SliderHead label="Громкость микрофона" value={`${sendVolume}%`} />
+        <input
+          type="range"
+          className="vh-range"
+          min={0}
+          max={300}
+          step={5}
+          value={sendVolume}
+          style={{ ['--fill-pct' as string]: `${sendVolume / 3}%` }}
+          onChange={(e) => onSendVolumeChange(Number(e.target.value))}
+        />
+      </div>
+
+      <div className="grid gap-2">
+        <SliderHead label="Громкость звука" value={`${outputVolume}%`} />
+        <input
+          type="range"
+          className="vh-range"
+          min={0}
+          max={300}
+          step={5}
+          value={outputVolume}
+          style={{ ['--fill-pct' as string]: `${outputVolume / 3}%` }}
+          onChange={(e) => onOutputVolumeChange(Number(e.target.value))}
+        />
+      </div>
+
+      <div className="grid gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="section-label">Шумоподавление</span>
+          <Toggle
+            checked={engine !== 'off'}
+            onChange={() => onEngineSelect(engine === 'off' ? lastVariant : 'off')}
+            ariaLabel="Шумоподавление"
+          />
+        </div>
+        {engine !== 'off' && (
+          <div className="border-l border-line pl-4 ml-1">
+            <Select
+              value={engine}
+              ariaLabel="Алгоритм шумоподавления"
+              onChange={(v) => onEngineSelect(v as ActiveEngineKind)}
+            >
+              {ENGINE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+      </div>
+
+      <label className="grid gap-1.5">
         <span className="section-label">Микрофон</span>
-        <select
-          className="input-field"
+        <Select
           value={micDeviceId ?? ''}
-          onChange={(e) => onMicDeviceSelect(e.target.value || null)}
+          ariaLabel="Микрофон"
+          onChange={(v) => onMicDeviceSelect(v || null)}
         >
           <option value="">Системный по умолчанию</option>
           {mics.map((d) => (
@@ -58,15 +192,15 @@ export function DeviceSettings({ onEngineSelect, onMicDeviceSelect, onOutputVolu
               {d.label || `Микрофон ${d.deviceId.slice(0, 6)}`}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
 
-      <label className="grid gap-1">
+      <label className="grid gap-1.5">
         <span className="section-label">Камера</span>
-        <select
-          className="input-field"
+        <Select
           value={camDeviceId ?? ''}
-          onChange={(e) => setCamDeviceId(e.target.value || null)}
+          ariaLabel="Камера"
+          onChange={(v) => setCamDeviceId(v || null)}
         >
           <option value="">Системная по умолчанию</option>
           {cams.map((d) => (
@@ -74,37 +208,7 @@ export function DeviceSettings({ onEngineSelect, onMicDeviceSelect, onOutputVolu
               {d.label || `Камера ${d.deviceId.slice(0, 6)}`}
             </option>
           ))}
-        </select>
-      </label>
-
-      <label className="grid gap-1">
-        <span className="section-label">Шумоподавление</span>
-        <select
-          className="input-field"
-          value={engine}
-          onChange={(e) => onEngineSelect(e.target.value as EngineKind)}
-        >
-          <option value="off">Выкл.</option>
-          {ENGINE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="grid gap-1.5">
-        <span className="section-label">Громкость · {outputVolume}%</span>
-        <input
-          type="range"
-          className="vh-range"
-          min={0}
-          max={200}
-          step={1}
-          value={outputVolume}
-          style={{ ['--fill-pct' as string]: `${(outputVolume / 200) * 100}%` }}
-          onChange={(e) => onOutputVolumeChange(Number(e.target.value))}
-        />
+        </Select>
       </label>
     </section>
   );

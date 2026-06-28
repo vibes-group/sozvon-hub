@@ -3,6 +3,7 @@
 
 import { create } from 'zustand';
 import type { EngineKind, ParticipantUI } from '../types';
+import type { Attachment } from '../sfu/protocol';
 import {
   KEYS,
   loadBoolean,
@@ -28,6 +29,10 @@ export type ChatMessage = {
   pending?: boolean;
   senderName?: string;
   senderClientId?: string;
+  attachments?: Attachment[];
+  // Transient sender-only fields while attachments upload (never broadcast).
+  uploadProgress?: number;
+  uploadFailed?: boolean;
 };
 
 export type JoinState = 'idle' | 'joining' | 'joined';
@@ -106,6 +111,9 @@ export interface AppState {
   chatSendOptimistic: (msg: ChatMessage) => void;
   chatReceive: (msg: ChatMessage) => void;
   chatDelete: (id: string) => void;
+  chatUpdateUploadProgress: (clientMsgId: string, progress: number) => void;
+  chatMarkUploadFailed: (clientMsgId: string) => void;
+  chatSetAttachments: (clientMsgId: string, attachments: Attachment[]) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -242,6 +250,22 @@ export const useStore = create<AppState>((set) => ({
       return { chat: [...s.chat, msg] };
     }),
   chatDelete: (id) => set((s) => ({ chat: s.chat.filter((m) => m.id !== id) })),
+  chatUpdateUploadProgress: (clientMsgId, progress) =>
+    set((s) => ({
+      chat: s.chat.map((m) =>
+        m.clientMsgId === clientMsgId ? { ...m, uploadProgress: progress } : m,
+      ),
+    })),
+  chatMarkUploadFailed: (clientMsgId) =>
+    set((s) => ({
+      chat: s.chat.map((m) =>
+        m.clientMsgId === clientMsgId ? { ...m, uploadFailed: true, uploadProgress: undefined } : m,
+      ),
+    })),
+  chatSetAttachments: (clientMsgId, attachments) =>
+    set((s) => ({
+      chat: s.chat.map((m) => (m.clientMsgId === clientMsgId ? { ...m, attachments } : m)),
+    })),
 }));
 
 export { loadPeerVolume };

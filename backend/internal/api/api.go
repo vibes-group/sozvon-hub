@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"sozvon-hub/backend/internal/auth"
+	"sozvon-hub/backend/internal/filestore"
 	"sozvon-hub/backend/internal/rooms"
 	turnsrv "sozvon-hub/backend/internal/turn"
 )
@@ -27,6 +28,7 @@ const turnCredsTTL = 6 * time.Hour
 type Deps struct {
 	Auth             *auth.Service
 	Rooms            *rooms.Manager
+	FileStore        *filestore.Store
 	StunURL          string
 	TurnURL          string
 	TurnSharedSecret string
@@ -46,6 +48,7 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	mux.HandleFunc("POST /api/auth/login", d.authLogin)
 	mux.HandleFunc("POST /api/auth/logout", d.authLogout)
 	mux.HandleFunc("PATCH /api/account", d.accountUpdate)
+	mux.HandleFunc("POST /api/account/password", d.accountChangePassword)
 
 	mux.HandleFunc("POST /api/invites", d.inviteCreate)
 	mux.HandleFunc("GET /api/invites", d.invitesList)
@@ -55,6 +58,9 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	mux.HandleFunc("GET /api/rooms", d.roomsList)
 	mux.HandleFunc("GET /api/rooms/{slug}", d.roomGet)
 	mux.HandleFunc("GET /api/config", d.config)
+
+	mux.HandleFunc("POST /api/upload", d.uploadFile)
+	mux.HandleFunc("GET /api/file/{uploadID}", d.downloadFile)
 
 	mux.HandleFunc("GET /api/admin/users", d.adminUsersList)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", d.adminUserUpdate)
@@ -146,6 +152,28 @@ func (d Deps) accountUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, auth.SessionResponse{User: updated})
+}
+
+type passwordChangeRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+func (d Deps) accountChangePassword(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	var body passwordChangeRequest
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := d.Auth.ChangePassword(r.Context(), user.ID, body.CurrentPassword, body.NewPassword); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Invites ---

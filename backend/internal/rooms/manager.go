@@ -1,7 +1,9 @@
 // Package rooms manages dynamic ephemeral video rooms. Each room is a row in the
 // SQLite rooms table plus, while in use, a live SFU room created lazily on first
-// join and torn down when the last participant leaves. A background sweeper ends
-// unused links past their TTL and reaps any live room that has emptied.
+// join. When the last participant leaves, the room is kept alive for a short
+// grace period so a reload or brief drop reconnects to the same call; only if it
+// is still empty when the grace lapses is it torn down and the link ended. A
+// background sweeper ends unused links past their TTL.
 package rooms
 
 import (
@@ -44,7 +46,20 @@ type Config struct {
 	FileStore   *filestore.Store
 
 	RoomTTL       time.Duration
+	GracePeriod   time.Duration
 	SweepInterval time.Duration
+}
+
+// liveSFU is the slice of *sfu.Room the manager drives. Narrowing it to an
+// interface lets the grace/teardown logic be tested without a real SFU.
+type liveSFU interface {
+	ServeWS(w http.ResponseWriter, r *http.Request)
+	Close()
+}
+
+// stoppable is the slice of *time.Timer used to cancel a pending grace teardown.
+type stoppable interface {
+	Stop() bool
 }
 
 // Manager owns the room table and the set of currently-live SFU rooms.
@@ -52,16 +67,21 @@ type Manager struct {
 	db  *sql.DB
 	cfg Config
 
-	mu    sync.Mutex
-	live  map[string]*liveRoom
-	clock func() time.Time
+	mu        sync.Mutex
+	live      map[string]*liveRoom
+	clock     func() time.Time
+	afterFunc func(time.Duration, func()) stoppable
 }
 
 // liveRoom couples an in-memory SFU room with a participant counter so the
-// manager can detect the moment the room empties and end it.
+// manager can detect when the room empties. When empty, graceTimer holds the
+// pending teardown; graceGen is bumped whenever grace is scheduled or cancelled
+// so a timer that already fired can detect it was superseded and bail.
 type liveRoom struct {
-	room  *sfu.Room
-	peers map[string]struct{}
+	room       liveSFU
+	peers      map[string]struct{}
+	graceTimer stoppable
+	graceGen   uint64
 }
 
 func NewManager(database *sql.DB, cfg Config) *Manager {
@@ -71,11 +91,15 @@ func NewManager(database *sql.DB, cfg Config) *Manager {
 	if cfg.RoomTTL <= 0 {
 		cfg.RoomTTL = 24 * time.Hour
 	}
+	if cfg.GracePeriod <= 0 {
+		cfg.GracePeriod = 5 * time.Minute
+	}
 	return &Manager{
-		db:    database,
-		cfg:   cfg,
-		live:  make(map[string]*liveRoom),
-		clock: time.Now,
+		db:        database,
+		cfg:       cfg,
+		live:      make(map[string]*liveRoom),
+		clock:     time.Now,
+		afterFunc: func(d time.Duration, f func()) stoppable { return time.AfterFunc(d, f) },
 	}
 }
 
@@ -199,6 +223,8 @@ func (m *Manager) ServeWS(w http.ResponseWriter, r *http.Request, slug string) {
 func (m *Manager) acquire(slug string) (*liveRoom, error) {
 	m.mu.Lock()
 	if lr, ok := m.live[slug]; ok {
+		// Reconnect during the grace window: keep the room and abort teardown.
+		cancelGrace(lr)
 		m.mu.Unlock()
 		return lr, nil
 	}
@@ -237,23 +263,38 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 func (m *Manager) peerJoined(slug, id string) {
 	m.mu.Lock()
 	if lr, ok := m.live[slug]; ok {
+		cancelGrace(lr)
 		lr.peers[id] = struct{}{}
 	}
 	m.mu.Unlock()
 }
 
-// peerLeft removes a peer and, if the room is now empty, ends it: closes the SFU
-// room, drops it from the live set, and marks the DB row ended so the link stops
-// working.
+// peerLeft removes a peer and, when the room empties, schedules teardown after
+// the grace period rather than ending it immediately. A reconnect within the
+// window (see acquire/peerJoined) cancels the teardown, so reloading the page
+// rejoins the same call instead of killing the room.
 func (m *Manager) peerLeft(slug, id string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	lr, ok := m.live[slug]
 	if !ok {
-		m.mu.Unlock()
 		return
 	}
 	delete(lr.peers, id)
 	if len(lr.peers) > 0 {
+		return
+	}
+	lr.graceGen++
+	gen := lr.graceGen
+	lr.graceTimer = m.afterFunc(m.cfg.GracePeriod, func() { m.graceExpired(slug, lr, gen) })
+}
+
+// graceExpired ends a room whose grace period lapsed while still empty. It bails
+// if the room was reclaimed (graceGen advanced) or refilled in the meantime, so
+// a timer that fired just as someone reconnected can't tear down a live call.
+func (m *Manager) graceExpired(slug string, lr *liveRoom, gen uint64) {
+	m.mu.Lock()
+	if cur, ok := m.live[slug]; !ok || cur != lr || lr.graceGen != gen || len(lr.peers) > 0 {
 		m.mu.Unlock()
 		return
 	}
@@ -262,7 +303,21 @@ func (m *Manager) peerLeft(slug, id string) {
 
 	lr.room.Close()
 	m.markEnded(slug)
-	log.Printf("rooms: %q emptied, ended", slug)
+	if m.cfg.FileStore != nil {
+		m.cfg.FileStore.DeleteRoom(slug)
+	}
+	log.Printf("rooms: %q empty past grace, ended", slug)
+}
+
+// cancelGrace aborts a pending teardown and invalidates any already-fired timer.
+// Must be called with m.mu held.
+func cancelGrace(lr *liveRoom) {
+	if lr.graceTimer == nil {
+		return
+	}
+	lr.graceTimer.Stop()
+	lr.graceTimer = nil
+	lr.graceGen++
 }
 
 func (m *Manager) markActive(slug string) {
@@ -322,6 +377,7 @@ func (m *Manager) Close() {
 	m.mu.Lock()
 	rooms := make([]*liveRoom, 0, len(m.live))
 	for _, lr := range m.live {
+		cancelGrace(lr)
 		rooms = append(rooms, lr)
 	}
 	m.live = make(map[string]*liveRoom)

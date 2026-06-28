@@ -21,6 +21,7 @@ import {
 } from '../audio/remote';
 import { createSpeakingLoop, type SpeakingLoop } from '../audio/speaking-loop';
 import { isCaptureEngine, preloadEngine } from '../audio/engine';
+import { errorName } from '../utils/mediaError';
 
 const LOCAL_SPEAKING_ID = 'local';
 
@@ -65,9 +66,11 @@ export function useAudioEngine() {
         : baseConstraints;
       return await navigator.mediaDevices.getUserMedia({ audio, video: false });
     } catch (err) {
-      // Saved deviceId may refer to an unplugged/revoked device. Drop the
-      // pinned id and retry with system default rather than failing the join.
-      if (deviceId && err instanceof Error && err.name === 'OverconstrainedError') {
+      // Saved deviceId may refer to an unplugged/revoked device, or one from a
+      // different device entirely. Drop the pinned id and retry with the system
+      // default rather than failing the join. OverconstrainedError is not an
+      // Error subclass in browsers, so match by name.
+      if (deviceId && errorName(err) === 'OverconstrainedError') {
         useStore.getState().setMicDeviceId(null);
         return await navigator.mediaDevices.getUserMedia({
           audio: baseConstraints,
