@@ -21,7 +21,18 @@ function useDevices(kind: MediaDeviceKind): MediaDeviceInfo[] {
       navigator.mediaDevices
         ?.enumerateDevices()
         .then((all) => {
-          if (!cancelled) setDevices(all.filter((d) => d.kind === kind));
+          if (cancelled) return;
+          // Drop the synthetic "default"/"communications" aliases (and any
+          // empty id) so each real device shows once — matches voice-hub.
+          setDevices(
+            all.filter(
+              (d) =>
+                d.kind === kind &&
+                d.deviceId &&
+                d.deviceId !== 'default' &&
+                d.deviceId !== 'communications',
+            ),
+          );
         })
         .catch(() => {});
     };
