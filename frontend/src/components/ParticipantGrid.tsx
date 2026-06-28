@@ -38,7 +38,7 @@ function CameraTile({ participant: p }: { participant: ParticipantUI }) {
     el.srcObject = stream;
     el.muted = true;
     if (stream) el.play().catch(() => {});
-  }, [stream]);
+  }, [stream, showVideo]);
 
   const muted = p.isSelf ? selfMuted : p.remoteMuted;
   const speakingRing = p.speaking && !muted;
