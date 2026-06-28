@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
+  adminListUsers,
+  adminSetCanInvite,
   ApiError,
   createInvite,
   createRoom,
   fetchMe,
   listInvites,
+  listMyRooms,
   login,
   logout,
   register,
@@ -13,6 +16,7 @@ import {
   updateAccount,
   type Invite,
   type RoomCreated,
+  type RoomSummary,
   type User,
 } from '../api';
 
@@ -212,6 +216,7 @@ function Dashboard({
   const [roomBusy, setRoomBusy] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [roomsVersion, setRoomsVersion] = useState(0);
 
   const roomLink = room ? `${window.location.origin}${room.url}` : '';
 
@@ -222,6 +227,7 @@ function Dashboard({
     setCopied(false);
     try {
       setRoom(await createRoom());
+      setRoomsVersion((v) => v + 1);
     } catch (err) {
       setRoomError(errText(err));
     } finally {
@@ -282,9 +288,136 @@ function Dashboard({
         )}
       </section>
 
+      <RoomsCard version={roomsVersion} />
+      {(user.canInvite || user.isAdmin) && <InvitesCard />}
+      {user.isAdmin && <AdminUsersCard />}
       <ProfileCard user={user} onUpdated={onUserUpdate} />
-      <InvitesCard />
     </div>
+  );
+}
+
+function RoomsCard({ version }: { version: number }) {
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listMyRooms()
+      .then((r) => {
+        if (!cancelled) setRooms(r);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  const copy = useCallback(async (slug: string, url: string) => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${url}`);
+      setCopied(slug);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  return (
+    <section className="card grid gap-3">
+      <h2 className="card-title">Мои комнаты</h2>
+      {loaded && rooms.length === 0 && <p className="text-[13px] text-muted-2">Активных комнат нет.</p>}
+      {rooms.length > 0 && (
+        <ul className="grid gap-2">
+          {rooms.map((r) => (
+            <li
+              key={r.slug}
+              className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
+            >
+              <span className="min-w-0 truncate text-[13px] text-muted">
+                <a href={r.url} className="text-accent underline underline-offset-2">
+                  {r.slug}
+                </a>
+                <span className="text-muted-2"> · {r.status === 'active' ? 'идёт' : 'ожидает'}</span>
+              </span>
+              <button className="btn btn-secondary btn-mini shrink-0" onClick={() => copy(r.slug, r.url)}>
+                {copied === r.slug ? 'Скопировано' : 'Копировать'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AdminUsersCard() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    adminListUsers()
+      .then(setUsers)
+      .catch((e) => setError(errText(e)))
+      .finally(() => setLoaded(true));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const toggle = useCallback(
+    async (u: User) => {
+      if (busyId) return;
+      setBusyId(u.id);
+      setError(null);
+      try {
+        await adminSetCanInvite(u.id, !u.canInvite);
+        setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, canInvite: !u.canInvite } : x)));
+      } catch (e) {
+        setError(errText(e));
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [busyId],
+  );
+
+  return (
+    <section className="card grid gap-3">
+      <h2 className="card-title">Пользователи</h2>
+      <p className="card-hint">Кто может приглашать новых</p>
+      {error && <p className="text-[13px] text-danger">{error}</p>}
+      {loaded && users.length === 0 && <p className="text-[13px] text-muted-2">Нет пользователей.</p>}
+      {users.length > 0 && (
+        <ul className="grid gap-2">
+          {users.map((u) => (
+            <li
+              key={u.id}
+              className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
+            >
+              <span className="min-w-0 truncate text-[13px]">
+                <span className="font-medium text-text">{u.username}</span>
+                {u.isAdmin && <span className="text-accent"> · админ</span>}
+              </span>
+              {u.isAdmin ? (
+                <span className="shrink-0 text-[12px] text-muted-2">всегда</span>
+              ) : (
+                <button
+                  className={`btn btn-mini shrink-0 ${u.canInvite ? 'btn-primary' : 'btn-secondary'}`}
+                  disabled={busyId === u.id}
+                  onClick={() => toggle(u)}
+                >
+                  {u.canInvite ? 'Может приглашать' : 'Не может'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -6,6 +6,7 @@ export type User = {
   username: string;
   name: string;
   isAdmin: boolean;
+  canInvite: boolean;
 };
 
 export type Invite = {
@@ -26,6 +27,14 @@ export type RoomCreated = {
 export type RoomStatus = {
   slug: string;
   joinable: boolean;
+};
+
+export type RoomSummary = {
+  slug: string;
+  url: string;
+  status: string;
+  createdAt?: string;
+  expiresAt?: string;
 };
 
 export class ApiError extends Error {
@@ -151,4 +160,20 @@ export async function fetchRoom(slug: string): Promise<RoomStatus | null> {
   if (!res.ok) throw await readError(res);
   const body = (await res.json()) as { room?: RoomStatus };
   return body.room ?? null;
+}
+
+export async function listMyRooms(): Promise<RoomSummary[]> {
+  const body = await request<{ rooms: RoomSummary[] }>('GET', '/api/rooms');
+  return body.rooms ?? [];
+}
+
+// ---- Admin ----
+
+export async function adminListUsers(): Promise<User[]> {
+  const body = await request<{ users: User[] }>('GET', '/api/admin/users');
+  return body.users ?? [];
+}
+
+export async function adminSetCanInvite(id: string, canInvite: boolean): Promise<void> {
+  await request<void>('PATCH', `/api/admin/users/${encodeURIComponent(id)}`, { canInvite });
 }

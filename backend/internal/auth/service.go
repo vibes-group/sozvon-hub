@@ -62,10 +62,11 @@ func sessionMetaFrom(ctx context.Context) (userAgent any, ipHash any) {
 }
 
 type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	IsAdmin  bool   `json:"isAdmin"`
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	IsAdmin   bool   `json:"isAdmin"`
+	CanInvite bool   `json:"canInvite"`
 }
 
 type SessionResponse struct {
@@ -207,8 +208,14 @@ func (s *Service) CreateInvite(ctx context.Context, inviterUserID string) (Invit
 		if !empty {
 			return Invite{}, ErrForbidden
 		}
-	} else if _, err := s.userByID(ctx, inviterUserID); err != nil {
-		return Invite{}, ErrForbidden
+	} else {
+		inviter, err := s.userByID(ctx, inviterUserID)
+		if err != nil {
+			return Invite{}, ErrForbidden
+		}
+		if !inviter.CanInvite && !inviter.IsAdmin {
+			return Invite{}, ErrForbidden
+		}
 	}
 
 	token, tokenHash, err := newOpaqueToken()
@@ -292,6 +299,46 @@ func (s *Service) DeleteInvite(ctx context.Context, inviterUserID, inviteID stri
 	return nil
 }
 
+// ListUsers returns every account, for the admin console.
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`select id, username, name, is_admin, can_invite from users order by username collate nocase`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	result := []User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Name, &u.IsAdmin, &u.CanInvite); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		result = append(result, u)
+	}
+	return result, rows.Err()
+}
+
+// SetCanInvite grants or revokes a user's permission to create invites.
+func (s *Service) SetCanInvite(ctx context.Context, userID string, canInvite bool) error {
+	if userID == "" {
+		return ErrForbidden
+	}
+	v := 0
+	if canInvite {
+		v = 1
+	}
+	res, err := s.db.ExecContext(ctx,
+		`update users set can_invite = ?, updated_at = ? where id = ?`,
+		v, time.Now().UTC().Format(timeFormat), userID)
+	if err != nil {
+		return fmt.Errorf("set can_invite: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *Service) Login(ctx context.Context, username, password string) (string, User, error) {
 	normalizedUsername, err := normalizeUsername(username)
 	if err != nil {
@@ -299,11 +346,11 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 	}
 
 	var userID, passwordHash, name string
-	var isAdmin bool
+	var isAdmin, canInvite bool
 	err = s.db.QueryRowContext(ctx,
-		`select id, password_hash, name, is_admin from users where username = ? collate nocase and disabled_at is null`,
+		`select id, password_hash, name, is_admin, can_invite from users where username = ? collate nocase and disabled_at is null`,
 		normalizedUsername,
-	).Scan(&userID, &passwordHash, &name, &isAdmin)
+	).Scan(&userID, &passwordHash, &name, &isAdmin, &canInvite)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", User{}, ErrInvalidCredentials
 	}
@@ -330,7 +377,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", User{}, fmt.Errorf("insert session: %w", err)
 	}
 
-	return token, User{ID: userID, Username: normalizedUsername, Name: name, IsAdmin: isAdmin}, nil
+	return token, User{ID: userID, Username: normalizedUsername, Name: name, IsAdmin: isAdmin, CanInvite: canInvite}, nil
 }
 
 // UpdateAccount changes the caller's display name and/or username. A nil field is
@@ -379,14 +426,14 @@ func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
 	var sessionID string
 	var lastUsedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		select users.id, users.username, users.name, users.is_admin, sessions.id, sessions.last_used_at
+		select users.id, users.username, users.name, users.is_admin, users.can_invite, sessions.id, sessions.last_used_at
 		from sessions
 		join users on users.id = sessions.user_id
 		where sessions.token_hash = ?
 		  and sessions.revoked_at is null
 		  and sessions.expires_at > ?
 		  and users.disabled_at is null
-	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin, &sessionID, &lastUsedAt)
+	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin, &user.CanInvite, &sessionID, &lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotAuthenticated
 	}
@@ -466,9 +513,9 @@ func (s *Service) CookieToken(r *http.Request) string {
 func (s *Service) userByID(ctx context.Context, userID string) (User, error) {
 	var user User
 	err := s.db.QueryRowContext(ctx,
-		`select id, username, name, is_admin from users where id = ? and disabled_at is null`,
+		`select id, username, name, is_admin, can_invite from users where id = ? and disabled_at is null`,
 		userID,
-	).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin)
+	).Scan(&user.ID, &user.Username, &user.Name, &user.IsAdmin, &user.CanInvite)
 	if err != nil {
 		return User{}, fmt.Errorf("select user: %w", err)
 	}

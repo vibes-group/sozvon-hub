@@ -104,6 +104,42 @@ func (m *Manager) Create(ctx context.Context, createdBy string) (RoomInfo, error
 	return RoomInfo{Slug: slug, URL: "/r/" + slug, ExpiresAt: expiresAt}, nil
 }
 
+// RoomSummary is the API view of a room in its creator's list.
+type RoomSummary struct {
+	Slug      string `json:"slug"`
+	URL       string `json:"url"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"createdAt"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// ListByCreator returns the caller's still-usable rooms (pending or active),
+// newest first. Ended rooms are omitted — their links are dead.
+func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSummary, error) {
+	rows, err := m.db.QueryContext(ctx, `
+		select slug, status, created_at, expires_at
+		from rooms
+		where created_by = ? and status != 'ended'
+		order by created_at desc
+		limit 100
+	`, createdBy)
+	if err != nil {
+		return nil, fmt.Errorf("list rooms: %w", err)
+	}
+	defer rows.Close()
+
+	result := []RoomSummary{}
+	for rows.Next() {
+		var r RoomSummary
+		if err := rows.Scan(&r.Slug, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan room: %w", err)
+		}
+		r.URL = "/r/" + r.Slug
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
 // Joinable reports whether a slug can currently be joined: it must exist, not be
 // ended, and (if still pending) not be past its TTL. Returns ErrRoomNotFound for
 // missing slugs so callers can 404.

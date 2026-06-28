@@ -52,8 +52,12 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	mux.HandleFunc("DELETE /api/invites/{id}", d.inviteDelete)
 
 	mux.HandleFunc("POST /api/rooms", d.roomCreate)
+	mux.HandleFunc("GET /api/rooms", d.roomsList)
 	mux.HandleFunc("GET /api/rooms/{slug}", d.roomGet)
 	mux.HandleFunc("GET /api/config", d.config)
+
+	mux.HandleFunc("GET /api/admin/users", d.adminUsersList)
+	mux.HandleFunc("PATCH /api/admin/users/{id}", d.adminUserUpdate)
 
 	mux.HandleFunc("GET /ws/{slug}", d.serveWS)
 
@@ -205,6 +209,21 @@ func (d Deps) roomCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"room": room})
 }
 
+func (d Deps) roomsList(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	list, err := d.Rooms.ListByCreator(r.Context(), user.ID)
+	if err != nil {
+		log.Printf("rooms list: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rooms": list})
+}
+
 func (d Deps) roomGet(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	joinable, err := d.Rooms.Joinable(r.Context(), slug)
@@ -224,6 +243,58 @@ func (d Deps) roomGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"room": map[string]any{"slug": slug, "joinable": true}})
+}
+
+// --- Admin ---
+
+// requireAdmin resolves the current user and ensures they are the administrator.
+func (d Deps) requireAdmin(w http.ResponseWriter, r *http.Request) (auth.User, bool) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return auth.User{}, false
+	}
+	if !user.IsAdmin {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
+		return auth.User{}, false
+	}
+	return user, true
+}
+
+func (d Deps) adminUsersList(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.requireAdmin(w, r); !ok {
+		return
+	}
+	users, err := d.Auth.ListUsers(r.Context())
+	if err != nil {
+		log.Printf("admin users list: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+type adminUserUpdateRequest struct {
+	CanInvite *bool `json:"canInvite"`
+}
+
+func (d Deps) adminUserUpdate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.requireAdmin(w, r); !ok {
+		return
+	}
+	var body adminUserUpdateRequest
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.CanInvite == nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request"})
+		return
+	}
+	if err := d.Auth.SetCanInvite(r.Context(), r.PathValue("id"), *body.CanInvite); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- ICE config ---
