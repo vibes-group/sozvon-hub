@@ -1,0 +1,26 @@
+# LOCAL DEV ONLY — bound to 127.0.0.1. Do not run on public hosts.
+name: sozvon-hub
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_ADDR: ":8080"
+      APP_WEB_DIR: "/app/web"
+      APP_ALLOW_INSECURE: "1"
+      APP_COOKIE_SECURE: "false"
+      APP_BOOTSTRAP_INVITE: "true"
+      APP_DB_PATH: "/app/data/sozvon-hub.db"
+      # localhost works with host ICE candidates only. To test calls across
+      # devices on your LAN, set PUBLIC_IP to this machine's LAN IP and map the
+      # UDP ports below.
+      # PUBLIC_IP: "192.168.1.10"
+    volumes:
+      - app_data:/app/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  app_data:

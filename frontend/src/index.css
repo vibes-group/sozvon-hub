@@ -1,0 +1,183 @@
+@import "tailwindcss";
+
+@theme {
+  /* Signal Minimal palette — black canvas, deep gray cards, vibrant green accent. */
+  --color-bg-0: #050505;
+  --color-bg-1: #0f0f0f;
+  --color-bg-2: #141414;
+  --color-bg-3: #1a1a1a;
+  --color-bg-input: #050505;
+  --color-line: #1f1f1f;
+  --color-line-strong: #2a2a2a;
+  --color-text: #ffffff;
+  --color-body: #dce5d9;
+  --color-muted: #9aa8a2;
+  --color-muted-2: #6b7872;
+  --color-accent: #4be277;
+  --color-accent-hover: #6bff8f;
+  --color-accent-strong: #22c55e;
+  --color-accent-ink: #050505;
+  --color-good: #4be277;
+  --color-danger: #f87171;
+
+  --radius-card: 0;
+  --radius-card-lg: 0;
+  --shadow-card: 0 0 0 0 transparent;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--color-body);
+    background-color: var(--color-bg-0);
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font-family: inherit;
+  }
+
+  *::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-line-strong);
+    border-radius: 0;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-muted-2);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply relative p-5 border border-line bg-bg-1;
+  }
+
+  .card-title {
+    @apply m-0 text-[16px] font-bold uppercase tracking-[0.18em] text-muted;
+  }
+
+  .card-hint {
+    @apply text-[12px] text-muted-2 uppercase tracking-[0.12em];
+  }
+
+  .section-label {
+    @apply block text-[13px] font-bold uppercase tracking-[0.18em] text-muted;
+  }
+
+  .btn {
+    @apply relative inline-flex items-center justify-center gap-2 whitespace-nowrap
+      px-4 py-2.5 text-[13px] font-bold uppercase tracking-[0.1em]
+      border border-transparent cursor-pointer transition-[transform,background,border-color,color] duration-150
+      active:translate-y-px focus-visible:outline-none focus-visible:border-accent
+      disabled:opacity-[0.4] disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-accent-ink border-accent hover:brightness-110;
+  }
+
+  .btn-secondary {
+    @apply bg-bg-1 border-line text-body hover:border-accent hover:text-accent;
+  }
+
+  .btn-danger {
+    @apply bg-bg-1 text-danger border-danger hover:bg-danger hover:text-accent-ink;
+  }
+
+  .btn-mini {
+    @apply px-2.5 py-1.5 text-[11px];
+  }
+
+  .input-field {
+    @apply w-full mt-1.5 px-3 py-2.5 text-text bg-bg-input border border-line
+      text-[14px]
+      transition-[border-color,background] duration-150
+      placeholder:text-muted-2
+      focus:outline-none focus:border-accent;
+  }
+
+  /* Range slider — thin track, square green thumb. */
+  .vh-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    outline: none;
+    cursor: pointer;
+  }
+  .vh-range::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(
+      to right,
+      color-mix(in oklab, var(--color-accent) 70%, var(--color-line)) 0%,
+      var(--color-line) var(--fill-pct, 0%),
+      var(--color-line) 100%
+    );
+  }
+  .vh-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    margin-top: -8px;
+    background: var(--color-accent);
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .vh-range::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    background: var(--color-line);
+    border: 0;
+  }
+  .vh-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--color-accent);
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .vh-range:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
