@@ -213,40 +213,6 @@ function Dashboard({
   onLogout: () => void;
   onUserUpdate: (u: User) => void;
 }) {
-  const [room, setRoom] = useState<RoomCreated | null>(null);
-  const [roomBusy, setRoomBusy] = useState(false);
-  const [roomError, setRoomError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [roomsVersion, setRoomsVersion] = useState(0);
-
-  const roomLink = room ? `${window.location.origin}${room.url}` : '';
-
-  const handleCreateRoom = useCallback(async () => {
-    if (roomBusy) return;
-    setRoomBusy(true);
-    setRoomError(null);
-    setCopied(false);
-    try {
-      setRoom(await createRoom());
-      setRoomsVersion((v) => v + 1);
-    } catch (err) {
-      setRoomError(errText(err));
-    } finally {
-      setRoomBusy(false);
-    }
-  }, [roomBusy]);
-
-  const copyLink = useCallback(async () => {
-    if (!roomLink) return;
-    try {
-      await navigator.clipboard.writeText(roomLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
-    }
-  }, [roomLink]);
-
   const handleLogout = useCallback(async () => {
     try {
       await logout();
@@ -258,69 +224,57 @@ function Dashboard({
 
   return (
     <div className="grid gap-4">
-      <section className="card grid gap-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[13px] text-muted">
-            Вы вошли как <span className="text-text font-medium">{user.username}</span>
-          </span>
-          <button className="btn btn-secondary btn-mini" onClick={handleLogout}>
-            Выйти
-          </button>
-        </div>
-
-        <button className="btn btn-primary justify-center" onClick={handleCreateRoom} disabled={roomBusy}>
-          {roomBusy ? 'Создаю…' : 'Создать комнату'}
+      <div className="flex items-center justify-between gap-3 px-1">
+        <span className="text-[13px] text-muted">
+          Вы вошли как <span className="font-medium text-text">{user.username}</span>
+        </span>
+        <button className="btn btn-secondary btn-mini" onClick={handleLogout}>
+          Выйти
         </button>
-        {roomError && <p className="text-[13px] text-danger">{roomError}</p>}
+      </div>
 
-        {room && (
-          <div className="grid gap-2 border border-line bg-bg-input p-3">
-            <span className="section-label">Ссылка на комнату</span>
-            <div className="flex gap-2">
-              <input className="input-field mt-0 flex-1" readOnly value={roomLink} onFocus={(e) => e.target.select()} />
-              <button className="btn btn-secondary shrink-0" onClick={copyLink}>
-                {copied ? 'Скопировано' : 'Копировать'}
-              </button>
-            </div>
-            <a className="text-[13px] text-accent underline underline-offset-2" href={room.url}>
-              Открыть комнату
-            </a>
-          </div>
-        )}
-      </section>
-
-      <RoomsCard version={roomsVersion} />
+      <RoomsCard />
+      <ProfileCard user={user} onUpdated={onUserUpdate} />
       {(user.canInvite || user.isAdmin) && <InvitesCard isAdmin={user.isAdmin} />}
       {user.isAdmin && <AdminUsersCard />}
-      <ProfileCard user={user} onUpdated={onUserUpdate} />
     </div>
   );
 }
 
-function RoomsCard({ version }: { version: number }) {
+function RoomsCard() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<RoomCreated | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refresh = useCallback(() => {
     listMyRooms()
-      .then((r) => {
-        if (!cancelled) setRooms(r);
-      })
+      .then(setRooms)
       .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [version]);
+      .finally(() => setLoaded(true));
+  }, []);
+  useEffect(refresh, [refresh]);
 
-  const copy = useCallback(async (slug: string, url: string) => {
+  const create = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setFresh(await createRoom());
+      refresh();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, refresh]);
+
+  const copy = useCallback(async (key: string, url: string) => {
     try {
       await navigator.clipboard.writeText(`${window.location.origin}${url}`);
-      setCopied(slug);
+      setCopied(key);
       setTimeout(() => setCopied(null), 2000);
     } catch {
       /* ignore */
@@ -329,7 +283,30 @@ function RoomsCard({ version }: { version: number }) {
 
   return (
     <section className="card grid gap-3">
-      <h2 className="card-title">Мои комнаты</h2>
+      <h2 className="card-title">Комнаты</h2>
+
+      <button className="btn btn-primary justify-center" onClick={create} disabled={busy}>
+        {busy ? 'Создаю…' : 'Создать комнату'}
+      </button>
+      {error && <p className="text-[13px] text-danger">{error}</p>}
+
+      {fresh && (
+        <div className="grid gap-2 border border-accent/40 bg-bg-input p-3">
+          <span className="section-label">Новая ссылка</span>
+          <div className="flex gap-2">
+            <input
+              className="input-field mt-0 flex-1"
+              readOnly
+              value={`${window.location.origin}${fresh.url}`}
+              onFocus={(e) => e.target.select()}
+            />
+            <button className="btn btn-secondary shrink-0" onClick={() => copy('fresh', fresh.url)}>
+              {copied === 'fresh' ? 'Скопировано' : 'Копировать'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {loaded && rooms.length === 0 && <p className="text-[13px] text-muted-2">Активных комнат нет.</p>}
       {rooms.length > 0 && (
         <ul className="grid gap-2">
