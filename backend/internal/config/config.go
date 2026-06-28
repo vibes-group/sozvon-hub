@@ -32,6 +32,15 @@ type Config struct {
 	TurnRelayMax uint16
 }
 
+// Tuning values that are never overridden per-deploy are constants, not env
+// knobs — fewer moving parts than envs nobody sets.
+const (
+	sessionTTL = 720 * time.Hour // 30 days
+	inviteTTL  = 168 * time.Hour // 7 days
+	roomTTL    = 24 * time.Hour
+	roomGrace  = 5 * time.Minute
+)
+
 func Load() Config {
 	hostname := env("APP_HOSTNAME", "localhost")
 	return Config{
@@ -39,17 +48,17 @@ func Load() Config {
 		WebDir:        env("APP_WEB_DIR", "./web"),
 		AppHostname:   hostname,
 		PublicIP:      os.Getenv("PUBLIC_IP"),
-		TurnRealm:     env("TURN_REALM", hostname),
+		TurnRealm:     hostname,
 		CookieSecure:  envBool("APP_COOKIE_SECURE", true),
 		AllowInsecure: envBool("APP_ALLOW_INSECURE", false),
 
 		DBPath:          env("APP_DB_PATH", "./data/sozvon-hub.db"),
 		BootstrapInvite: envBool("APP_BOOTSTRAP_INVITE", false),
 
-		SessionTTL: time.Duration(envInt64("AUTH_SESSION_TTL_HOURS", 720)) * time.Hour,
-		InviteTTL:  time.Duration(envInt64("AUTH_INVITE_TTL_HOURS", 168)) * time.Hour,
-		RoomTTL:    time.Duration(envInt64("ROOM_TTL_HOURS", 24)) * time.Hour,
-		RoomGrace:  time.Duration(envInt64("ROOM_GRACE_MINUTES", 5)) * time.Minute,
+		SessionTTL: sessionTTL,
+		InviteTTL:  inviteTTL,
+		RoomTTL:    roomTTL,
+		RoomGrace:  roomGrace,
 
 		TurnPort:     envUint16("TURN_PORT", 3478),
 		UDPPortMin:   envUint16("UDP_PORT_MIN", 10101),
@@ -87,19 +96,6 @@ func envBool(key string, fallback bool) bool {
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		log.Printf("config: bad %s=%q (%v), using default %v", key, value, err, fallback)
-		return fallback
-	}
-	return parsed
-}
-
-func envInt64(key string, fallback int64) int64 {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		log.Printf("config: bad %s=%q (%v), using default %d", key, value, err, fallback)
 		return fallback
 	}
 	return parsed

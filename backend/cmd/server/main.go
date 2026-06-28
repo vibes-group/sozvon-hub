@@ -92,7 +92,7 @@ func main() {
 		TTL:             2 * time.Hour,
 		TTLHardCap:      cfg.RoomTTL,
 		MaxUploadBytes:  100 * 1024 * 1024,
-		MaxTotalBytes:   2 * 1024 * 1024 * 1024,
+		MaxTotalBytes:   1 * 1024 * 1024 * 1024,
 		JanitorInterval: time.Minute,
 	})
 	if err != nil {
