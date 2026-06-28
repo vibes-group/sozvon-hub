@@ -30,6 +30,12 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : 'Неизвестная ошибка';
 }
 
+function absUrl(path: string | null | undefined): string {
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${window.location.origin}${path}`;
+}
+
 export default function HomePage() {
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get('invite');
@@ -317,7 +323,7 @@ function InvitesCard() {
   );
 
   const copyInvite = useCallback(async (inv: Invite) => {
-    const url = inv.url ?? '';
+    const url = absUrl(inv.url);
     if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
@@ -346,7 +352,7 @@ function InvitesCard() {
             <input
               className="input-field mt-0 flex-1"
               readOnly
-              value={freshToken.url}
+              value={absUrl(freshToken.url)}
               onFocus={(e) => e.target.select()}
             />
             <button className="btn btn-secondary shrink-0" onClick={() => copyInvite(freshToken)}>
