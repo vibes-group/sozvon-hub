@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -63,6 +64,7 @@ func sessionMetaFrom(ctx context.Context) (userAgent any, ipHash any) {
 type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
+	Name     string `json:"name"`
 }
 
 type SessionResponse struct {
@@ -169,8 +171,8 @@ func (s *Service) createUserSession(
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`insert into users (id, username, password_hash) values (?, ?, ?)`,
-		userID, normalizedUsername, passwordHash,
+		`insert into users (id, username, name, password_hash) values (?, ?, ?, ?)`,
+		userID, normalizedUsername, normalizedUsername, passwordHash,
 	); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return "", User{}, ErrUsernameTaken
@@ -190,7 +192,7 @@ func (s *Service) createUserSession(
 		return "", User{}, fmt.Errorf("commit register: %w", err)
 	}
 
-	return token, User{ID: userID, Username: normalizedUsername}, nil
+	return token, User{ID: userID, Username: normalizedUsername, Name: normalizedUsername}, nil
 }
 
 // CreateInvite mints a one-time registration token. An empty inviterUserID is
@@ -295,11 +297,11 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", User{}, ErrInvalidCredentials
 	}
 
-	var userID, passwordHash string
+	var userID, passwordHash, name string
 	err = s.db.QueryRowContext(ctx,
-		`select id, password_hash from users where username = ? collate nocase and disabled_at is null`,
+		`select id, password_hash, name from users where username = ? collate nocase and disabled_at is null`,
 		normalizedUsername,
-	).Scan(&userID, &passwordHash)
+	).Scan(&userID, &passwordHash, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", User{}, ErrInvalidCredentials
 	}
@@ -326,7 +328,42 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", User{}, fmt.Errorf("insert session: %w", err)
 	}
 
-	return token, User{ID: userID, Username: normalizedUsername}, nil
+	return token, User{ID: userID, Username: normalizedUsername, Name: name}, nil
+}
+
+// UpdateAccount changes the caller's display name and/or username. A nil field is
+// left unchanged. Username uniqueness is enforced (ErrUsernameTaken).
+func (s *Service) UpdateAccount(ctx context.Context, userID string, newUsername, newName *string) (User, error) {
+	if userID == "" {
+		return User{}, ErrForbidden
+	}
+	now := time.Now().UTC().Format(timeFormat)
+	if newName != nil {
+		name, err := validateDisplayName(*newName)
+		if err != nil {
+			return User{}, err
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`update users set name = ?, updated_at = ? where id = ?`, name, now, userID,
+		); err != nil {
+			return User{}, fmt.Errorf("update name: %w", err)
+		}
+	}
+	if newUsername != nil {
+		username, err := normalizeUsername(*newUsername)
+		if err != nil {
+			return User{}, err
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`update users set username = ?, updated_at = ? where id = ?`, username, now, userID,
+		); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return User{}, ErrUsernameTaken
+			}
+			return User{}, fmt.Errorf("update username: %w", err)
+		}
+	}
+	return s.userByID(ctx, userID)
 }
 
 func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
@@ -340,14 +377,14 @@ func (s *Service) CurrentUser(ctx context.Context, token string) (User, error) {
 	var sessionID string
 	var lastUsedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		select users.id, users.username, sessions.id, sessions.last_used_at
+		select users.id, users.username, users.name, sessions.id, sessions.last_used_at
 		from sessions
 		join users on users.id = sessions.user_id
 		where sessions.token_hash = ?
 		  and sessions.revoked_at is null
 		  and sessions.expires_at > ?
 		  and users.disabled_at is null
-	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &sessionID, &lastUsedAt)
+	`, tokenHash[:], now.Format(timeFormat)).Scan(&user.ID, &user.Username, &user.Name, &sessionID, &lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotAuthenticated
 	}
@@ -427,9 +464,9 @@ func (s *Service) CookieToken(r *http.Request) string {
 func (s *Service) userByID(ctx context.Context, userID string) (User, error) {
 	var user User
 	err := s.db.QueryRowContext(ctx,
-		`select id, username from users where id = ? and disabled_at is null`,
+		`select id, username, name from users where id = ? and disabled_at is null`,
 		userID,
-	).Scan(&user.ID, &user.Username)
+	).Scan(&user.ID, &user.Username, &user.Name)
 	if err != nil {
 		return User{}, fmt.Errorf("select user: %w", err)
 	}
@@ -452,6 +489,19 @@ func normalizeUsername(username string) (string, error) {
 	for _, r := range normalized {
 		if r < '!' || r > '~' {
 			return "", errors.New("invalid_username")
+		}
+	}
+	return normalized, nil
+}
+
+func validateDisplayName(name string) (string, error) {
+	normalized := strings.TrimSpace(name)
+	if normalized == "" || utf8.RuneCountInString(normalized) > 64 {
+		return "", errors.New("invalid_name")
+	}
+	for _, r := range normalized {
+		if r < 0x20 || r == 0x7f {
+			return "", errors.New("invalid_name")
 		}
 	}
 	return normalized, nil

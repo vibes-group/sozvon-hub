@@ -193,7 +193,14 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
       <main className="min-h-dvh bg-bg-0 text-body flex flex-col">
         <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-line">
           <div className="flex items-baseline gap-3 min-w-0">
-            <span className="text-[15px] font-semibold tracking-tight text-text">sozvon</span>
+            <button
+              type="button"
+              onClick={handleLeave}
+              title="На главную"
+              className="text-[15px] font-semibold tracking-tight text-text transition-colors hover:text-accent"
+            >
+              sozvon
+            </button>
             <span className="text-[12px] text-muted-2 uppercase tracking-[0.12em] truncate">
               комната {roomSlug}
             </span>
@@ -210,7 +217,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
         <div className="flex-1 grid gap-4 p-4 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] items-start">
           <div className="grid gap-4 content-start min-w-0">
             <ScreenShareGallery onTileClick={handleTileClick} />
-            <ParticipantGrid />
+            <ParticipantGrid onLocalAudioChange={audio.applyAllRemoteGains} />
           </div>
           <div className="grid gap-4 content-start lg:h-[calc(100dvh-150px)] lg:grid-rows-[auto_minmax(0,1fr)]">
             <DeviceSettings

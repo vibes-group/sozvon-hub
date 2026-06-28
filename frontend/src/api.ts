@@ -4,6 +4,7 @@
 export type User = {
   id: string;
   username: string;
+  name: string;
 };
 
 export type Invite = {
@@ -97,6 +98,16 @@ export async function login(username: string, password: string): Promise<User> {
 
 export async function logout(): Promise<void> {
   await request<void>('POST', '/api/auth/logout');
+}
+
+// Update the caller's display name and/or username. Username must be unique
+// (throws ApiError code 'username_taken' otherwise).
+export async function updateAccount(patch: {
+  username?: string;
+  name?: string;
+}): Promise<User> {
+  const body = await request<{ user: User }>('PATCH', '/api/account', patch);
+  return body.user;
 }
 
 // ---- Invites ----

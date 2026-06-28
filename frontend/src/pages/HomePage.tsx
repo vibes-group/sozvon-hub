@@ -10,6 +10,7 @@ import {
   logout,
   register,
   revokeInvite,
+  updateAccount,
   type Invite,
   type RoomCreated,
   type User,
@@ -18,6 +19,7 @@ import {
 const ERROR_RU: Record<string, string> = {
   invalid_credentials: 'Неверное имя пользователя или пароль.',
   invalid_username: 'Недопустимое имя пользователя.',
+  invalid_name: 'Недопустимое имя.',
   invalid_password: 'Пароль должен быть не короче 8 символов.',
   username_taken: 'Это имя пользователя уже занято.',
   invalid_invite: 'Приглашение недействительно или истекло.',
@@ -67,7 +69,7 @@ export default function HomePage() {
         </header>
 
         {me ? (
-          <Dashboard user={me} onLogout={() => setMe(null)} />
+          <Dashboard user={me} onLogout={() => setMe(null)} onUserUpdate={setMe} />
         ) : inviteToken ? (
           <RegisterForm inviteToken={inviteToken} onAuthed={setMe} />
         ) : (
@@ -197,7 +199,15 @@ function RegisterForm({
   );
 }
 
-function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
+function Dashboard({
+  user,
+  onLogout,
+  onUserUpdate,
+}: {
+  user: User;
+  onLogout: () => void;
+  onUserUpdate: (u: User) => void;
+}) {
   const [room, setRoom] = useState<RoomCreated | null>(null);
   const [roomBusy, setRoomBusy] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
@@ -272,8 +282,83 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
         )}
       </section>
 
+      <ProfileCard user={user} onUpdated={onUserUpdate} />
       <InvitesCard />
     </div>
+  );
+}
+
+function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: User) => void }) {
+  const [name, setName] = useState(user.name);
+  const [username, setUsername] = useState(user.username);
+  const [busy, setBusy] = useState<null | 'name' | 'username'>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const save = useCallback(
+    async (patch: { name?: string; username?: string }, which: 'name' | 'username', okText: string) => {
+      if (busy) return;
+      setBusy(which);
+      setMsg(null);
+      try {
+        const updated = await updateAccount(patch);
+        onUpdated(updated);
+        setName(updated.name);
+        setUsername(updated.username);
+        setMsg({ text: okText, ok: true });
+      } catch (err) {
+        setMsg({ text: errText(err), ok: false });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [busy, onUpdated],
+  );
+
+  const nameChanged = name.trim() !== '' && name.trim() !== user.name;
+  const usernameChanged = username.trim() !== '' && username.trim() !== user.username;
+
+  return (
+    <section className="card grid gap-4">
+      <h2 className="card-title">Профиль</h2>
+      <label className="grid gap-1">
+        <span className="section-label">Имя для звонков</span>
+        <div className="flex gap-2">
+          <input
+            className="input-field mt-0 flex-1"
+            value={name}
+            maxLength={64}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button
+            className="btn btn-secondary shrink-0"
+            disabled={!nameChanged || busy === 'name'}
+            onClick={() => save({ name: name.trim() }, 'name', 'Имя обновлено.')}
+          >
+            {busy === 'name' ? '…' : 'Сохранить'}
+          </button>
+        </div>
+      </label>
+      <label className="grid gap-1">
+        <span className="section-label">Имя пользователя</span>
+        <div className="flex gap-2">
+          <input
+            className="input-field mt-0 flex-1"
+            value={username}
+            maxLength={64}
+            autoComplete="off"
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <button
+            className="btn btn-secondary shrink-0"
+            disabled={!usernameChanged || busy === 'username'}
+            onClick={() => save({ username: username.trim() }, 'username', 'Имя пользователя обновлено.')}
+          >
+            {busy === 'username' ? '…' : 'Сохранить'}
+          </button>
+        </div>
+      </label>
+      {msg && <p className={`text-[13px] ${msg.ok ? 'text-good' : 'text-danger'}`}>{msg.text}</p>}
+    </section>
   );
 }
 

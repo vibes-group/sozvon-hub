@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router';
-import { fetchRoom } from '../api';
+import { useParams, Link, useNavigate } from 'react-router';
+import { fetchRoom, fetchMe, updateAccount, type User } from '../api';
 import { loadDisplayName, saveDisplayName } from '../utils/storage';
 import { CallScreen } from '../components/CallScreen';
 
@@ -12,8 +12,10 @@ type LoadState =
 
 export default function RoomPage() {
   const { slug } = useParams();
+  const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [name, setName] = useState<string>(() => loadDisplayName());
+  const [account, setAccount] = useState<User | null>(null);
   const [joined, setJoined] = useState(false);
 
   useEffect(() => {
@@ -37,16 +39,36 @@ export default function RoomPage() {
     };
   }, [slug]);
 
+  // Logged-in users: the account display name is the source of truth — prefill
+  // it over the localStorage value. Guests keep the localStorage name.
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe()
+      .then((u) => {
+        if (cancelled || !u) return;
+        setAccount(u);
+        if (u.name) setName(u.name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleJoin = useCallback(() => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    // Always cache locally (covers guests); persist to the account when changed.
     saveDisplayName(trimmed);
+    if (account && trimmed !== account.name) {
+      void updateAccount({ name: trimmed }).catch(() => {});
+    }
     setJoined(true);
-  }, [name]);
+  }, [name, account]);
 
   const handleLeave = useCallback(() => {
-    setJoined(false);
-  }, []);
+    navigate('/');
+  }, [navigate]);
 
   if (joined && slug) {
     return <CallScreen roomSlug={slug} displayName={name.trim()} onLeave={handleLeave} />;
@@ -64,9 +86,7 @@ export default function RoomPage() {
         {state.kind === 'unavailable' && (
           <div className="card grid gap-3 text-center">
             <h1 className="card-title">Комната недоступна</h1>
-            <p className="text-[14px] text-muted">
-              Ссылка устарела или звонок уже завершён.
-            </p>
+            <p className="text-[14px] text-muted">Ссылка устарела или звонок уже завершён.</p>
             <Link to="/" className="btn btn-secondary justify-center">
               На главную
             </Link>
@@ -110,6 +130,12 @@ export default function RoomPage() {
             >
               Присоединиться
             </button>
+            <Link
+              to="/"
+              className="text-center text-[12px] text-muted-2 transition-colors hover:text-muted"
+            >
+              На главную
+            </Link>
           </div>
         )}
       </div>

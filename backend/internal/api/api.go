@@ -45,6 +45,7 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	mux.HandleFunc("POST /api/auth/register", d.authRegister)
 	mux.HandleFunc("POST /api/auth/login", d.authLogin)
 	mux.HandleFunc("POST /api/auth/logout", d.authLogout)
+	mux.HandleFunc("PATCH /api/account", d.accountUpdate)
 
 	mux.HandleFunc("POST /api/invites", d.inviteCreate)
 	mux.HandleFunc("GET /api/invites", d.invitesList)
@@ -118,6 +119,29 @@ func (d Deps) authLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, d.Auth.ClearCookie())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type accountUpdateRequest struct {
+	Username *string `json:"username"`
+	Name     *string `json:"name"`
+}
+
+func (d Deps) accountUpdate(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	var body accountUpdateRequest
+	if !readJSON(w, r, &body) {
+		return
+	}
+	updated, err := d.Auth.UpdateAccount(r.Context(), user.ID, body.Username, body.Name)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, auth.SessionResponse{User: updated})
 }
 
 // --- Invites ---
@@ -279,7 +303,7 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "invalid_invite"})
 	case errors.Is(err, auth.ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errorResponse{Error: "forbidden"})
-	case err != nil && (err.Error() == "invalid_username" || err.Error() == "invalid_password"):
+	case err != nil && (err.Error() == "invalid_username" || err.Error() == "invalid_password" || err.Error() == "invalid_name"):
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	default:
 		log.Printf("auth: %v", err)
