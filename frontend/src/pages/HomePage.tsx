@@ -29,6 +29,9 @@ export default function HomePage() {
 
   const [me, setMe] = useState<User | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Login is tucked behind a corner button — a guest's primary content is their
+  // recent rooms, not the sign-in form.
+  const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
     fetchMe()
@@ -48,6 +51,14 @@ export default function HomePage() {
   return (
     <main className="relative min-h-dvh bg-bg-0 text-body px-4 py-10 grid place-items-center">
       {me && <AccountControls onLogout={() => setMe(null)} />}
+      {!me && !inviteToken && !showLogin && (
+        <button
+          className="absolute right-4 top-4 btn btn-secondary btn-mini"
+          onClick={() => setShowLogin(true)}
+        >
+          Войти
+        </button>
+      )}
       <div className="w-full max-w-md grid gap-6">
         <header className="text-center">
           <h1 className="text-2xl font-extrabold uppercase tracking-[0.2em] text-accent">
@@ -61,7 +72,7 @@ export default function HomePage() {
           <RegisterForm inviteToken={inviteToken} onAuthed={setMe} />
         ) : (
           <div className="grid gap-6">
-            <LoginForm onAuthed={setMe} />
+            {showLogin && <LoginForm onAuthed={setMe} />}
             <RecentRoomsCard />
           </div>
         )}
@@ -310,11 +321,15 @@ function RoomsCard() {
   }, []);
   useEffect(refresh, [refresh]);
 
-  // Keep the relative "истекает через …" labels fresh without a reload.
+  // Tick the relative labels and re-poll so participant counts / close timers
+  // stay current without a manual reload.
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
+    const id = setInterval(() => {
+      setNow(Date.now());
+      refresh();
+    }, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [refresh]);
 
   const create = useCallback(async () => {
     if (busy) return;
@@ -425,7 +440,14 @@ function RoomsCard() {
 
 // Status/expiry tail shown after a room's name, e.g. " · ожидает · истекает через 2 ч".
 function RoomStatusTail({ room, now }: { room: RoomSummary; now: number }) {
-  if (room.status === 'active') return <span className="text-muted-2"> · идёт</span>;
+  if (room.status === 'active') {
+    if (room.participants > 0) {
+      return <span className="text-muted-2"> · идёт · {room.participants} в звонке</span>;
+    }
+    // Active but empty: the grace teardown is counting down.
+    const tail = closeTail(room.closesAt, now);
+    return <span className="text-muted-2"> · никого{tail ? ` · ${tail}` : ''}</span>;
+  }
   const tail = expiryTail(room.expiresAt, now);
   return <span className="text-muted-2"> · ожидает{tail ? ` · ${tail}` : ''}</span>;
 }
@@ -570,4 +592,18 @@ function expiryTail(iso: string | undefined, now: number): string {
   const h = Math.floor(min / 60);
   const rem = min % 60;
   return rem ? `истекает через ${h} ч ${rem} мин` : `истекает через ${h} ч`;
+}
+
+// Time left until an empty room auto-closes after the grace period, e.g.
+// "закроется через 4 мин". Returns '' when there's no pending close.
+function closeTail(iso: string | undefined, now: number): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const min = Math.round((t - now) / 60_000);
+  if (min < 1) return 'закрывается';
+  if (min < 60) return `закроется через ${min} мин`;
+  const h = Math.floor(min / 60);
+  const rem = min % 60;
+  return rem ? `закроется через ${h} ч ${rem} мин` : `закроется через ${h} ч`;
 }

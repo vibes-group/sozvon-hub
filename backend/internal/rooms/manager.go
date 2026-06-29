@@ -82,6 +82,9 @@ type liveRoom struct {
 	peers      map[string]struct{}
 	graceTimer stoppable
 	graceGen   uint64
+	// graceDeadline is when the empty room will be torn down; zero when the room
+	// has participants (no teardown pending). Surfaced to the UI as closesAt.
+	graceDeadline time.Time
 }
 
 func NewManager(database *sql.DB, cfg Config) *Manager {
@@ -155,13 +158,34 @@ func (m *Manager) Rename(ctx context.Context, createdBy, slug, name string) erro
 }
 
 // RoomSummary is the API view of a room in a user's list (created or joined).
+// Participants and ClosesAt reflect live in-memory state at request time: how
+// many are in the call now and, when it has emptied, when the grace teardown
+// will end it.
 type RoomSummary struct {
-	Slug      string `json:"slug"`
-	URL       string `json:"url"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"createdAt"`
-	ExpiresAt string `json:"expiresAt"`
+	Slug         string `json:"slug"`
+	URL          string `json:"url"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Participants int    `json:"participants"`
+	CreatedAt    string `json:"createdAt"`
+	ExpiresAt    string `json:"expiresAt"`
+	ClosesAt     string `json:"closesAt,omitempty"`
+}
+
+// liveInfo reports the current participant count for a slug and, when the room
+// has emptied and a grace teardown is pending, when it will close. A slug with
+// no live room (pending, or not yet rebuilt) reports zero and no close time.
+func (m *Manager) liveInfo(slug string) (participants int, closesAt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, ok := m.live[slug]
+	if !ok {
+		return 0, ""
+	}
+	if !lr.graceDeadline.IsZero() {
+		closesAt = lr.graceDeadline.UTC().Format(timeFormat)
+	}
+	return len(lr.peers), closesAt
 }
 
 // ListByCreator returns the caller's still-usable rooms (pending or active),
@@ -188,6 +212,7 @@ func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSu
 			return nil, fmt.Errorf("scan room: %w", err)
 		}
 		r.URL = "/r/" + r.Slug
+		r.Participants, r.ClosesAt = m.liveInfo(r.Slug)
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -218,6 +243,7 @@ func (m *Manager) ListJoined(ctx context.Context, userID string) ([]RoomSummary,
 			return nil, fmt.Errorf("scan joined room: %w", err)
 		}
 		r.URL = "/r/" + r.Slug
+		r.Participants, r.ClosesAt = m.liveInfo(r.Slug)
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -388,6 +414,7 @@ func (m *Manager) peerLeft(slug, id string) {
 	}
 	lr.graceGen++
 	gen := lr.graceGen
+	lr.graceDeadline = m.clock().Add(m.cfg.GracePeriod)
 	lr.graceTimer = m.afterFunc(m.cfg.GracePeriod, func() { m.graceExpired(slug, lr, gen) })
 }
 
@@ -420,6 +447,7 @@ func cancelGrace(lr *liveRoom) {
 	lr.graceTimer.Stop()
 	lr.graceTimer = nil
 	lr.graceGen++
+	lr.graceDeadline = time.Time{}
 }
 
 func (m *Manager) markActive(slug string) {

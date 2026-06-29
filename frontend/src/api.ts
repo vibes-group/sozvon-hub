@@ -36,8 +36,12 @@ export type RoomSummary = {
   url: string;
   name: string;
   status: string;
+  // Live snapshot at fetch time: who's in the call now, and (when empty) when
+  // the room will auto-close after the grace period.
+  participants: number;
   createdAt?: string;
   expiresAt?: string;
+  closesAt?: string;
 };
 
 export class ApiError extends Error {

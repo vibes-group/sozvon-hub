@@ -60,9 +60,11 @@ beforeEach(() => {
 });
 
 describe('HomePage when logged out', () => {
-  it('renders the login form once fetchMe resolves to null', async () => {
+  it('reveals the login form once the "Войти" button is clicked', async () => {
     fetchMeMock.mockResolvedValue(null);
+    const user = userEvent.setup();
     renderAt('/');
+    await user.click(await screen.findByRole('button', { name: 'Войти' }));
     expect(await screen.findByRole('heading', { name: 'Вход' })).toBeInTheDocument();
   });
 
@@ -72,6 +74,7 @@ describe('HomePage when logged out', () => {
     const user = userEvent.setup();
     renderAt('/');
 
+    await user.click(await screen.findByRole('button', { name: 'Войти' }));
     await screen.findByRole('heading', { name: 'Вход' });
     await user.type(screen.getByLabelText('Логин'), '  alice  ');
     await user.type(screen.getByLabelText('Пароль'), 'secret');
@@ -87,6 +90,7 @@ describe('HomePage when logged out', () => {
     const user = userEvent.setup();
     renderAt('/');
 
+    await user.click(await screen.findByRole('button', { name: 'Войти' }));
     await screen.findByRole('heading', { name: 'Вход' });
     await user.type(screen.getByLabelText('Логин'), 'alice');
     await user.type(screen.getByLabelText('Пароль'), 'wrong');
