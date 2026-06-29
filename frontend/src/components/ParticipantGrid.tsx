@@ -1,25 +1,43 @@
-import { useEffect, useRef } from 'react';
-import { Mic, MicOff, ScreenShare, Video, Volume2, VolumeX } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
-import { useCameraStore } from '../store/useCameraStore';
-import { loadPeerVolume, savePeerVolume } from '../utils/storage';
 import type { ParticipantUI } from '../types';
-import { ScreenShareTile } from './ScreenShareTile';
+import { justifiedLayout, type LayoutInput, type StageTarget } from './tileLayout';
+import { AudioChip, CameraTile, ScreenShareTile, SelfScreenTile } from './CallTiles';
 
-function gridColumns(count: number): string {
-  if (count <= 1) return 'grid-cols-1';
-  if (count <= 4) return 'grid-cols-2';
-  if (count <= 9) return 'grid-cols-3';
-  return 'grid-cols-4';
+const GAP = 12; // px — matches gap-3 used elsewhere
+
+// Callback ref so the observer (re)attaches whenever the measured node mounts —
+// the grid area only exists when there's video, so a mount-once effect would
+// miss it on an audio-first call that later turns a camera on.
+function useElementSize() {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const roRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setSize({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    roRef.current = ro;
+    setSize({ w: el.clientWidth, h: el.clientHeight });
+  }, []);
+  return { ref, size };
 }
+
+type VideoTile =
+  | { kind: 'screen-self'; id: string }
+  | { kind: 'screen'; id: string; hasSystemAudio: boolean }
+  | { kind: 'camera'; id: string; participant: ParticipantUI };
 
 export function ParticipantGrid({
   onLocalAudioChange,
-  onScreenTileClick,
+  onPin,
 }: {
   onLocalAudioChange: () => void;
-  onScreenTileClick: (publisherId: string) => void;
+  onPin: (target: StageTarget) => void;
 }) {
   const participants = useStore(selectParticipants);
   const selfId = useStore(selectSelfPeerId);
@@ -27,166 +45,115 @@ export function ParticipantGrid({
   const myStream = useScreenShareStore((s) => s.myStream);
   const myStatus = useScreenShareStore((s) => s.myStatus);
 
-  const otherShares = Array.from(shares.values()).filter((sh) => sh.publisherId !== selfId);
+  const otherShares = useMemo(
+    () => Array.from(shares.values()).filter((sh) => sh.publisherId !== selfId),
+    [shares, selfId],
+  );
   const showSelfShare = myStatus === 'publishing' && !!myStream;
-  const cols = gridColumns(otherShares.length + (showSelfShare ? 1 : 0) + participants.length);
 
-  // Screen shares lead the grid so the demo is the first thing the eye lands on.
-  return (
-    <div className={`grid gap-3 ${cols} content-start`}>
-      {showSelfShare && myStream && <SelfScreenTile stream={myStream} />}
-      {otherShares.map((sh) => (
-        <ScreenShareTile
-          key={`screen-${sh.publisherId}`}
-          publisherId={sh.publisherId}
-          hasSystemAudio={sh.hasSystemAudio}
-          onClick={() => onScreenTileClick(sh.publisherId)}
-        />
-      ))}
-      {participants.map((p) => (
-        <CameraTile key={p.id} participant={p} onLocalAudioChange={onLocalAudioChange} />
-      ))}
-    </div>
-  );
-}
-
-// Live preview of our own screen capture — rendered straight from the local
-// MediaStream (no SFU round-trip), muted to avoid system-audio feedback.
-function SelfScreenTile({ stream }: { stream: MediaStream }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    el.srcObject = stream;
-    el.muted = true;
-    el.play().catch(() => {});
-  }, [stream]);
-
-  return (
-    <div className="relative aspect-video overflow-hidden border border-accent bg-black">
-      <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/70 to-transparent px-2.5 py-1.5 text-white">
-        <ScreenShare size={14} className="text-accent" />
-        <span className="truncate text-[13px] font-medium">Ваш экран</span>
-      </div>
-    </div>
-  );
-}
-
-function CameraTile({
-  participant: p,
-  onLocalAudioChange,
-}: {
-  participant: ParticipantUI;
-  onLocalAudioChange: () => void;
-}) {
-  const selfStream = useCameraStore((s) => (p.isSelf ? s.selfStream : null));
-  const remoteStream = useCameraStore((s) => (p.isSelf ? null : s.remoteStreams.get(p.id) ?? null));
-  const selfMuted = useStore((s) => s.selfMuted);
-  const stream = p.isSelf ? selfStream : remoteStream;
-  const showVideo = p.cameraOn && !!stream;
-  const isRemote = !p.isSelf;
-
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    el.srcObject = stream;
-    el.muted = true;
-    if (stream) el.play().catch(() => {});
-  }, [stream, showVideo]);
-
-  // Restore this peer's saved volume (keyed by their stable clientId) once known.
-  useEffect(() => {
-    if (!isRemote || !p.clientId) return;
-    const saved = loadPeerVolume(p.clientId);
-    if (saved != null && saved !== p.localVolume) {
-      useStore.getState().updateParticipant(p.id, { localVolume: saved });
-      onLocalAudioChange();
+  // Video tiles lead (screens first), audio-only participants collapse to chips.
+  const { videoTiles, audioParticipants } = useMemo(() => {
+    const video: VideoTile[] = [];
+    if (showSelfShare && selfId) video.push({ kind: 'screen-self', id: selfId });
+    for (const sh of otherShares)
+      video.push({ kind: 'screen', id: sh.publisherId, hasSystemAudio: sh.hasSystemAudio });
+    const audio: ParticipantUI[] = [];
+    for (const p of participants) {
+      if (p.cameraOn) video.push({ kind: 'camera', id: p.id, participant: p });
+      else audio.push(p);
     }
+    return { videoTiles: video, audioParticipants: audio };
+  }, [showSelfShare, selfId, otherShares, participants]);
+
+  // Aspect ratios reported by live video elements; layout reflows when they land.
+  const aspectsRef = useRef<Map<string, number>>(new Map());
+  const [aspectVer, bumpAspects] = useReducer((x: number) => x + 1, 0);
+  const reportAspect = useCallback((id: string, ar: number) => {
+    const cur = aspectsRef.current.get(id);
+    if (cur != null && Math.abs(cur - ar) < 0.01) return;
+    aspectsRef.current.set(id, ar);
+    bumpAspects();
+  }, []);
+  // Drop aspects for tiles that are gone so stale ratios don't linger.
+  useEffect(() => {
+    const ids = new Set(videoTiles.map((t) => t.id));
+    for (const key of aspectsRef.current.keys()) if (!ids.has(key)) aspectsRef.current.delete(key);
+  }, [videoTiles]);
+
+  const { ref: areaRef, size } = useElementSize();
+
+  const layout = useMemo(() => {
+    const items: LayoutInput[] = videoTiles.map((t) => ({
+      id: t.id,
+      ar: aspectsRef.current.get(t.id) ?? 16 / 9,
+    }));
+    return justifiedLayout(items, size.w, size.h, GAP, { minH: 96, maxH: size.h });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.clientId]);
+  }, [videoTiles, size.w, size.h, aspectVer]);
 
-  const setLocalVolume = (v: number) => {
-    useStore.getState().updateParticipant(p.id, { localVolume: v });
-    if (p.clientId) savePeerVolume(p.clientId, v);
-    onLocalAudioChange();
-  };
-  const toggleLocalMute = () => {
-    useStore.getState().updateParticipant(p.id, { localMuted: !p.localMuted });
-    onLocalAudioChange();
-  };
+  const tileById = useMemo(() => new Map(videoTiles.map((t) => [t.id, t])), [videoTiles]);
 
-  const muted = p.isSelf ? selfMuted : p.remoteMuted;
-  const speakingRing = p.speaking && !muted;
-  const volPct = ((p.localMuted ? 0 : p.localVolume) / 200) * 100;
+  const hasVideo = videoTiles.length > 0;
+
+  function renderTile(id: string, w: number, h: number) {
+    const t = tileById.get(id);
+    if (!t) return null;
+    return (
+      <div key={id} style={{ width: w, height: h }}>
+        {t.kind === 'screen-self' && myStream && (
+          <SelfScreenTile
+            stream={myStream}
+            onPin={() => onPin({ kind: 'screen', id })}
+            onAspect={(ar) => reportAspect(id, ar)}
+          />
+        )}
+        {t.kind === 'screen' && (
+          <ScreenShareTile
+            publisherId={id}
+            hasSystemAudio={t.hasSystemAudio}
+            onPin={() => onPin({ kind: 'screen', id })}
+          />
+        )}
+        {t.kind === 'camera' && (
+          <CameraTile
+            participant={t.participant}
+            onLocalAudioChange={onLocalAudioChange}
+            onPin={() => onPin({ kind: 'camera', id })}
+            onAspect={(ar) => reportAspect(id, ar)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={`group relative aspect-video overflow-hidden border bg-bg-2 ${
-        speakingRing ? 'border-accent' : 'border-line'
-      } transition-[border-color] duration-150`}
-    >
-      {showVideo ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          className={`h-full w-full object-cover ${p.isSelf ? '-scale-x-100' : ''}`}
-        />
-      ) : (
-        <div className="grid h-full w-full place-items-center">
-          <div className="grid h-16 w-16 place-items-center rounded-full bg-bg-3 text-[22px] font-bold uppercase text-muted">
-            {(p.display || '?').trim().charAt(0) || '?'}
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      {hasVideo ? (
+        <div ref={areaRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex flex-col items-center gap-3">
+            {layout.rows.map((row, i) => (
+              <div key={i} className="flex justify-center gap-3" style={{ height: row.h }}>
+                {row.tiles.map((tl) => renderTile(tl.id, tl.w, tl.h))}
+              </div>
+            ))}
           </div>
         </div>
-      )}
-
-      {isRemote && (
-        <div className="absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
-          <button
-            type="button"
-            onClick={toggleLocalMute}
-            aria-label={p.localMuted ? 'Включить звук участника' : 'Заглушить участника'}
-            title={p.localMuted ? 'Включить звук участника' : 'Заглушить участника'}
-            className={`grid h-7 w-7 shrink-0 place-items-center ${
-              p.localMuted ? 'text-danger' : 'text-white/90 hover:text-accent'
-            }`}
-          >
-            {p.localMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={200}
-            step={5}
-            value={p.localMuted ? 0 : p.localVolume}
-            disabled={p.localMuted}
-            onChange={(e) => setLocalVolume(Number(e.target.value))}
-            className="vh-range flex-1"
-            style={{ '--fill-pct': `${volPct}%` } as React.CSSProperties}
-            aria-label="Громкость участника"
-          />
-          <span className="w-9 shrink-0 text-right text-[11px] text-white/80">{p.localVolume}%</span>
+      ) : (
+        // Pure audio call — center the avatars instead of a thin strip.
+        <div className="flex min-h-0 flex-1 flex-wrap content-center items-center justify-center gap-3 overflow-y-auto">
+          {audioParticipants.map((p) => (
+            <AudioChip key={p.id} participant={p} size="lg" onLocalAudioChange={onLocalAudioChange} />
+          ))}
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 to-transparent px-2.5 py-1.5">
-        <span className="truncate text-[13px] font-medium text-white">
-          {p.display}
-          {p.isSelf && <span className="text-muted-2"> · вы</span>}
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5 text-white/90">
-          {p.screenSharing && <ScreenShare size={14} className="text-accent" />}
-          {p.cameraOn && <Video size={14} />}
-          {p.localMuted && !p.isSelf && <VolumeX size={14} className="text-danger" />}
-          {muted ? (
-            <MicOff size={14} className="text-danger" />
-          ) : (
-            <Mic size={14} className={speakingRing ? 'text-accent' : ''} />
-          )}
-        </span>
-      </div>
+      {hasVideo && audioParticipants.length > 0 && (
+        <div className="flex shrink-0 flex-wrap gap-2 border-t border-line pt-3">
+          {audioParticipants.map((p) => (
+            <AudioChip key={p.id} participant={p} onLocalAudioChange={onLocalAudioChange} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

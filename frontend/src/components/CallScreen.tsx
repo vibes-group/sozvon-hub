@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageSquare, SlidersHorizontal, X } from 'lucide-react';
-import { useStore } from '../store/useStore';
+import { LayoutGrid, MessageSquare, Presentation, SlidersHorizontal, X } from 'lucide-react';
+import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { useSFU } from '../hooks/useSFU';
@@ -10,10 +10,11 @@ import { playMuteSound, playUnmuteSound } from '../audio/feedback-sounds';
 import type { EngineKind } from '../types';
 import { ControlsBar } from './ControlsBar';
 import { ParticipantGrid } from './ParticipantGrid';
+import { StageView, ENDED_GRACE_MS } from './StageView';
+import type { StageTarget } from './tileLayout';
 import { ChatPanel } from './ChatPanel';
 import { DeviceSettings } from './DeviceSettings';
 import { ScreenShareSettings } from './ScreenShareSettings';
-import { ScreenShareFocused } from './ScreenShareFocused';
 
 // Mobile browsers (iOS Safari, Android Chrome) don't implement getDisplayMedia,
 // so screen sharing is simply unavailable there — hide the control rather than
@@ -36,12 +37,19 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   const joinState = useStore((s) => s.joinState);
   const statusText = useStore((s) => s.statusText);
   const statusState = useStore((s) => s.statusState);
+  const selfId = useStore(selectSelfPeerId);
+  const participants = useStore(selectParticipants);
+  const shares = useScreenShareStore((s) => s.shares);
+  const myShareStatus = useScreenShareStore((s) => s.myStatus);
 
   // Chat is a togglable right drawer; settings live in a modal. Both start
   // closed so the call grid gets the full width.
   const [chatOpen, setChatOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [name, setName] = useState(displayName);
+
+  // Speaker view: one feed (camera or screen) on a large stage. null = tile grid.
+  const [stage, setStage] = useState<StageTarget | null>(null);
 
   const handleNameChange = useCallback(
     (v: string) => {
@@ -222,28 +230,91 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
     useStore.getState().setStatus('Настройки сброшены.', false, true);
   }, [audio, handleEngineSelect, handleMicDeviceSelect]);
 
-  const handleTileClick = useCallback(
-    (publisherId: string) => {
-      const share = useScreenShareStore.getState();
-      const prev = share.focusedId;
-      if (prev === publisherId) return;
-      if (prev) session.unsubscribeScreenShare(prev);
-      share.setFocused(publisherId);
-      session.subscribeScreenShare(publisherId);
-    },
-    [session],
-  );
+  // Promote a feed to the stage (from a grid tile or a filmstrip swap).
+  const handlePin = useCallback((target: StageTarget) => setStage(target), []);
+  const handleStageClose = useCallback(() => setStage(null), []);
 
-  const handleFocusedClose = useCallback(() => {
+  // Pick a sensible feed for the grid⇄speaker toggle: a screen if any, else a
+  // remote camera, else our own camera.
+  const pickDefaultStage = useCallback((): StageTarget | null => {
     const share = useScreenShareStore.getState();
-    const focused = share.focusedId;
-    if (focused) session.unsubscribeScreenShare(focused);
-    share.setFocused(null);
-  }, [session]);
+    for (const sh of share.shares.values()) {
+      if (sh.publisherId !== selfId) return { kind: 'screen', id: sh.publisherId };
+    }
+    if (share.myStatus === 'publishing' && share.myStream && selfId) {
+      return { kind: 'screen', id: selfId };
+    }
+    const remoteCam = participants.find((p) => !p.isSelf && p.cameraOn);
+    if (remoteCam) return { kind: 'camera', id: remoteCam.id };
+    const selfCam = participants.find((p) => p.isSelf && p.cameraOn);
+    if (selfCam) return { kind: 'camera', id: selfCam.id };
+    return null;
+  }, [participants, selfId]);
+
+  const handleToggleView = useCallback(() => {
+    if (stage) setStage(null);
+    else {
+      const t = pickDefaultStage();
+      if (t) setStage(t);
+    }
+  }, [stage, pickDefaultStage]);
+
+  // Keep the screen-share subscription in lockstep with the stage. Only remote
+  // screens are pulled from the SFU; our own screen plays from the local stream.
+  useEffect(() => {
+    const share = useScreenShareStore.getState();
+    const want = stage?.kind === 'screen' && stage.id !== selfId ? stage.id : null;
+    if (want) {
+      if (share.focusedId !== want) {
+        if (share.focusedId) session.unsubscribeScreenShare(share.focusedId);
+        share.setFocused(want);
+        session.subscribeScreenShare(want);
+      }
+    } else if (share.focusedId) {
+      session.unsubscribeScreenShare(share.focusedId);
+      share.setFocused(null);
+    }
+  }, [stage, selfId, session]);
+
+  // Auto-promote a freshly started remote screen share — but never yank the
+  // user off a stage they already chose.
+  const prevShareIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(
+      Array.from(shares.values())
+        .map((sh) => sh.publisherId)
+        .filter((id) => id !== selfId),
+    );
+    let fresh: string | null = null;
+    for (const id of ids) if (!prevShareIdsRef.current.has(id)) fresh = id;
+    prevShareIdsRef.current = ids;
+    if (fresh && !stage) setStage({ kind: 'screen', id: fresh });
+  }, [shares, selfId, stage]);
+
+  // A screen on stage that ended: show "стрим завершён" briefly, then drop to grid.
+  useEffect(() => {
+    if (stage?.kind !== 'screen' || stage.id === selfId || shares.has(stage.id)) return;
+    const t = setTimeout(
+      () => setStage((cur) => (cur?.kind === 'screen' && cur.id === stage.id ? null : cur)),
+      ENDED_GRACE_MS,
+    );
+    return () => clearTimeout(t);
+  }, [stage, shares, selfId]);
+
+  // Our own screen on stage stopped → back to grid.
+  useEffect(() => {
+    if (stage?.kind === 'screen' && stage.id === selfId && myShareStatus !== 'publishing') {
+      setStage(null);
+    }
+  }, [stage, selfId, myShareStatus]);
+
+  // A pinned participant left the room → back to grid.
+  useEffect(() => {
+    if (stage?.kind === 'camera' && !participants.some((p) => p.id === stage.id)) setStage(null);
+  }, [stage, participants]);
 
   return (
     <>
-      <ScreenShareFocused onClose={handleFocusedClose} />
       <main className="h-dvh overflow-hidden bg-bg-0 text-body flex flex-col">
         <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-line shrink-0">
           <div className="flex items-baseline gap-3 min-w-0">
@@ -267,6 +338,13 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             >
               {statusText}
             </span>
+            <HeaderButton
+              label={stage ? 'Сетка' : 'Докладчик'}
+              active={!!stage}
+              onClick={handleToggleView}
+            >
+              {stage ? <LayoutGrid size={18} /> : <Presentation size={18} />}
+            </HeaderButton>
             <HeaderButton label="Чат" active={chatOpen} onClick={() => setChatOpen((v) => !v)}>
               <MessageSquare size={18} />
             </HeaderButton>
@@ -281,11 +359,17 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
         </header>
 
         <div className="flex-1 min-h-0 flex">
-          <section className="flex-1 min-w-0 overflow-y-auto p-4">
-            <ParticipantGrid
-              onLocalAudioChange={audio.applyAllRemoteGains}
-              onScreenTileClick={handleTileClick}
-            />
+          <section className="flex-1 min-w-0 min-h-0 overflow-hidden p-4">
+            {stage ? (
+              <StageView
+                stage={stage}
+                onSetStage={handlePin}
+                onClose={handleStageClose}
+                onLocalAudioChange={audio.applyAllRemoteGains}
+              />
+            ) : (
+              <ParticipantGrid onLocalAudioChange={audio.applyAllRemoteGains} onPin={handlePin} />
+            )}
           </section>
           {chatOpen && (
             <div className="w-full max-w-[380px] shrink-0 flex flex-col min-h-0 p-3 pl-0">
