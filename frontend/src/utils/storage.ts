@@ -84,6 +84,24 @@ export function makeGuestName(): string {
   return `${pick(GUEST_ADJECTIVES)} ${pick(GUEST_ANIMALS)}`;
 }
 
+// Active-call marker, scoped to the tab via sessionStorage and keyed by room
+// slug. Survives a page refresh (so reloading mid-call re-joins instead of
+// dropping back to the name prompt) but clears on tab close and never leaks to
+// other tabs.
+const JOINED_ROOM_PREFIX = 'sozvon-hub.joined-room.';
+
+export function markRoomJoined(slug: string): void {
+  sessionStorage.setItem(JOINED_ROOM_PREFIX + slug, '1');
+}
+
+export function wasRoomJoined(slug: string): boolean {
+  return sessionStorage.getItem(JOINED_ROOM_PREFIX + slug) === '1';
+}
+
+export function clearRoomJoined(slug: string): void {
+  sessionStorage.removeItem(JOINED_ROOM_PREFIX + slug);
+}
+
 // Stable client identifier, generated once on first launch and persisted.
 // Sent in every `hello` so peers can key per-peer UI prefs by something that
 // survives reconnects (peer IDs are ephemeral per WS).

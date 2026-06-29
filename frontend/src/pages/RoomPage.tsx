@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { fetchRoom, fetchMe, updateAccount, type User } from '../api';
-import { loadDisplayName, saveDisplayName, makeGuestName } from '../utils/storage';
+import {
+  loadDisplayName,
+  saveDisplayName,
+  makeGuestName,
+  markRoomJoined,
+  wasRoomJoined,
+  clearRoomJoined,
+} from '../utils/storage';
 import { CallScreen } from '../components/CallScreen';
 
 type LoadState =
@@ -58,6 +65,16 @@ export default function RoomPage() {
     };
   }, []);
 
+  // Reloaded mid-call: the tab still remembers we joined this room, so skip the
+  // name prompt and re-join once the room is confirmed available. Gating on
+  // `ready` means a call that ended meanwhile shows "Комната недоступна"
+  // instead of a CallScreen that can't connect.
+  useEffect(() => {
+    if (state.kind === 'ready' && slug && !joined && wasRoomJoined(slug)) {
+      setJoined(true);
+    }
+  }, [state, slug, joined]);
+
   const handleJoin = useCallback(() => {
     // Name is optional: a blank entry uses the placeholder guest name.
     const finalName = name.trim() || guestName;
@@ -67,12 +84,14 @@ export default function RoomPage() {
       void updateAccount({ name: finalName }).catch(() => {});
     }
     if (finalName !== name) setName(finalName);
+    if (slug) markRoomJoined(slug);
     setJoined(true);
-  }, [name, guestName, account]);
+  }, [name, guestName, account, slug]);
 
   const handleLeave = useCallback(() => {
+    if (slug) clearRoomJoined(slug);
     navigate('/');
-  }, [navigate]);
+  }, [navigate, slug]);
 
   if (joined && slug) {
     return <CallScreen roomSlug={slug} displayName={name.trim()} onLeave={handleLeave} />;

@@ -29,6 +29,7 @@ function renderRoom(slug: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchMe).mockResolvedValue(null);
+  sessionStorage.clear();
 });
 
 describe('RoomPage', () => {
@@ -50,6 +51,22 @@ describe('RoomPage', () => {
     expect(await screen.findByRole('heading', { name: 'Вход в звонок' })).toBeInTheDocument();
     expect(screen.getByLabelText('Ваше имя')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Присоединиться' })).toBeInTheDocument();
+  });
+
+  it('re-joins automatically on reload when the tab already joined this room', async () => {
+    fetchRoomMock.mockResolvedValue({ slug: 'ok', joinable: true });
+    sessionStorage.setItem('sozvon-hub.joined-room.ok', '1');
+    renderRoom('ok');
+    expect(await screen.findByTestId('call-screen')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Вход в звонок' })).not.toBeInTheDocument();
+  });
+
+  it('does not auto-join an unavailable room even if previously joined', async () => {
+    fetchRoomMock.mockResolvedValue({ slug: 'gone', joinable: false });
+    sessionStorage.setItem('sozvon-hub.joined-room.gone', '1');
+    renderRoom('gone');
+    expect(await screen.findByText('Комната недоступна')).toBeInTheDocument();
+    expect(screen.queryByTestId('call-screen')).not.toBeInTheDocument();
   });
 
   it('surfaces an error message when fetchRoom rejects', async () => {
