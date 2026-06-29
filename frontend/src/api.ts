@@ -192,6 +192,34 @@ export type AdminUserView = {
   lastSeenAt: string;
 };
 
+// Absolute, shareable URL for a room from its slug.
+export function roomUrl(slug: string): string {
+  return `${window.location.origin}/r/${slug}`;
+}
+
+// Share a room link in one click. On mobile (where the Web Share API exists)
+// this opens the native share sheet; on desktop it falls back to copying the
+// link to the clipboard. A user-cancelled share sheet is not an error.
+export async function shareRoom(slug: string): Promise<'shared' | 'copied' | 'fail'> {
+  const url = roomUrl(slug);
+  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+    try {
+      await navigator.share({ title: 'Созвон', url });
+      return 'shared';
+    } catch (e) {
+      // AbortError = user dismissed the sheet; treat as a no-op, not a failure.
+      if (e instanceof DOMException && e.name === 'AbortError') return 'fail';
+      // Otherwise fall through to clipboard.
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    return 'copied';
+  } catch {
+    return 'fail';
+  }
+}
+
 export async function adminListUsers(): Promise<AdminUserView[]> {
   const body = await request<{ users: AdminUserView[] }>('GET', '/api/admin/users');
   return body.users ?? [];

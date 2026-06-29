@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LayoutGrid, MessageSquare, Presentation, SlidersHorizontal, X } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Presentation, Share2, SlidersHorizontal, X } from 'lucide-react';
+import { shareRoom } from '../api';
 import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
 import { useAudioEngine } from '../hooks/useAudioEngine';
@@ -38,6 +39,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   const statusText = useStore((s) => s.statusText);
   const statusState = useStore((s) => s.statusState);
   const selfId = useStore(selectSelfPeerId);
+  const setStatus = useStore((s) => s.setStatus);
   const participants = useStore(selectParticipants);
   const shares = useScreenShareStore((s) => s.shares);
   const myShareStatus = useScreenShareStore((s) => s.myStatus);
@@ -50,6 +52,12 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
 
   // Speaker view: one feed (camera or screen) on a large stage. null = tile grid.
   const [stage, setStage] = useState<StageTarget | null>(null);
+
+  const handleShare = useCallback(async () => {
+    const result = await shareRoom(roomSlug);
+    if (result === 'copied') setStatus('Ссылка скопирована');
+    else if (result === 'shared') setStatus('Ссылкой поделились');
+  }, [roomSlug, setStatus]);
 
   const handleNameChange = useCallback(
     (v: string) => {
@@ -338,6 +346,9 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             >
               {statusText}
             </span>
+            <HeaderButton label="Поделиться" onClick={handleShare}>
+              <Share2 size={18} />
+            </HeaderButton>
             <HeaderButton
               label={stage ? 'Сетка' : 'Докладчик'}
               active={!!stage}
@@ -454,12 +465,12 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
 
 function HeaderButton({
   label,
-  active,
+  active = false,
   onClick,
   children,
 }: {
   label: string;
-  active: boolean;
+  active?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {

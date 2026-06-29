@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
+import { Check, Share2 } from 'lucide-react';
 import {
   adminListUsers,
   adminUpdateUser,
@@ -14,6 +15,7 @@ import {
   logout,
   register,
   revokeInvite,
+  shareRoom,
   updateAccount,
   type AdminUserView,
   type Invite,
@@ -281,14 +283,13 @@ function RoomsCard() {
     }
   }, [busy, refresh]);
 
-  const copy = useCallback(async (key: string, url: string) => {
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}${url}`);
-      setCopied(key);
-      setTimeout(() => setCopied(null), 2000);
-    } catch {
-      /* ignore */
-    }
+  const share = useCallback(async (key: string, slug: string) => {
+    const result = await shareRoom(slug);
+    if (result === 'fail') return;
+    // On desktop this means "copied"; on mobile the native sheet already gave
+    // its own feedback, but the tick is harmless either way.
+    setCopied(key);
+    setTimeout(() => setCopied(null), 2000);
   }, []);
 
   return (
@@ -310,8 +311,8 @@ function RoomsCard() {
               value={`${window.location.origin}${fresh.url}`}
               onFocus={(e) => e.target.select()}
             />
-            <button className="btn btn-secondary shrink-0" onClick={() => copy('fresh', fresh.url)}>
-              {copied === 'fresh' ? 'Скопировано' : 'Копировать'}
+            <button className="btn btn-secondary shrink-0" onClick={() => share('fresh', fresh.slug)}>
+              {copied === 'fresh' ? 'Скопировано' : 'Поделиться'}
             </button>
           </div>
           {fresh.expiresAt && (
@@ -340,8 +341,13 @@ function RoomsCard() {
                   return <span className="text-muted-2"> · ожидает{tail ? ` · ${tail}` : ''}</span>;
                 })()}
               </span>
-              <button className="btn btn-secondary btn-mini shrink-0" onClick={() => copy(r.slug, r.url)}>
-                {copied === r.slug ? 'Скопировано' : 'Копировать'}
+              <button
+                className="btn btn-secondary btn-mini shrink-0"
+                onClick={() => share(r.slug, r.slug)}
+                title="Поделиться ссылкой"
+                aria-label="Поделиться ссылкой"
+              >
+                {copied === r.slug ? <Check size={15} /> : <Share2 size={15} />}
               </button>
             </li>
           ))}
