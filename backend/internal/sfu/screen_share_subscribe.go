@@ -132,7 +132,7 @@ func (r *Room) finishScreenSubSetup(
 	if subEntry.audioSender != nil {
 		// nil onReport drops audio RRs so they don't clobber the video-side
 		// lossPerMille that drives the auto-downgrade loop.
-		go r.forwardRTCPToPublisher(session, subEntry.audioSender, nil)
+		go forwardRTCP(&session.publisherVideoSSRC, session.publisherPC, subEntry.audioSender, nil)
 	}
 
 	offerEnv := protocol.OfferEnvelope{

@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -45,9 +44,8 @@ type Config struct {
 	AppHostname string
 	FileStore   *filestore.Store
 
-	RoomTTL       time.Duration
-	GracePeriod   time.Duration
-	SweepInterval time.Duration
+	RoomTTL     time.Duration
+	GracePeriod time.Duration
 }
 
 // liveSFU is the slice of *sfu.Room the manager drives. Narrowing it to an
@@ -88,9 +86,6 @@ type liveRoom struct {
 }
 
 func NewManager(database *sql.DB, cfg Config) *Manager {
-	if cfg.SweepInterval <= 0 {
-		cfg.SweepInterval = time.Minute
-	}
 	if cfg.RoomTTL <= 0 {
 		cfg.RoomTTL = 24 * time.Hour
 	}
@@ -477,7 +472,7 @@ func (m *Manager) markEnded(slug string) {
 // Run starts the background sweeper until ctx is cancelled. The sweeper ends
 // unused links past their TTL.
 func (m *Manager) Run(ctx context.Context) {
-	t := time.NewTicker(m.cfg.SweepInterval)
+	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
 		select {
@@ -522,5 +517,5 @@ func newSlug() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate slug: %w", err)
 	}
-	return strings.ToLower(slugEncoding.EncodeToString(b)), nil
+	return slugEncoding.EncodeToString(b), nil
 }

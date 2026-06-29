@@ -584,6 +584,14 @@ function JoinedRoomRow({ room, now, copied, onShare }: RoomRowProps) {
   );
 }
 
+// "{verb} через 4 мин" / "{verb} через 23 ч 10 мин" for a positive minute count.
+function durationTail(min: number, verb: string): string {
+  if (min < 60) return `${verb} через ${min} мин`;
+  const h = Math.floor(min / 60);
+  const rem = min % 60;
+  return rem ? `${verb} через ${h} ч ${rem} мин` : `${verb} через ${h} ч`;
+}
+
 // Relative time left until a pending link expires, e.g. "истекает через 23 ч".
 // Returns '' when there's nothing meaningful to show (no/invalid date).
 function expiryTail(iso: string | undefined, now: number): string {
@@ -592,11 +600,7 @@ function expiryTail(iso: string | undefined, now: number): string {
   if (Number.isNaN(t)) return '';
   const ms = t - now;
   if (ms <= 60_000) return 'истекает';
-  const min = Math.round(ms / 60_000);
-  if (min < 60) return `истекает через ${min} мин`;
-  const h = Math.floor(min / 60);
-  const rem = min % 60;
-  return rem ? `истекает через ${h} ч ${rem} мин` : `истекает через ${h} ч`;
+  return durationTail(Math.round(ms / 60_000), 'истекает');
 }
 
 // Time left until an empty room auto-closes after the grace period, e.g.
@@ -607,8 +611,5 @@ function closeTail(iso: string | undefined, now: number): string {
   if (Number.isNaN(t)) return '';
   const min = Math.round((t - now) / 60_000);
   if (min < 1) return 'закрывается';
-  if (min < 60) return `закроется через ${min} мин`;
-  const h = Math.floor(min / 60);
-  const rem = min % 60;
-  return rem ? `закроется через ${h} ч ${rem} мин` : `закроется через ${h} ч`;
+  return durationTail(min, 'закроется');
 }

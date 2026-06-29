@@ -170,7 +170,7 @@ function StageSelfScreen({ stream }: { stream: MediaStream }) {
   );
 }
 
-const ENDED_GRACE_MS = 1500;
+export const ENDED_GRACE_MS = 1500;
 
 function StageRemoteScreen({ publisherId }: { publisherId: string }) {
   const videoStream = useScreenShareStore((s) => s.focusedStream);
@@ -304,5 +304,3 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
     </div>
   );
 }
-
-export { ENDED_GRACE_MS };

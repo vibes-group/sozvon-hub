@@ -33,7 +33,7 @@ var errVP9ShortPayload = errors.New("vp9: payload too short")
 // Parse decodes the VP9 RTP descriptor at the head of pkt.Payload. Layout
 // (first byte): I P L F B E V Z. Subsequent fields are present per the
 // flag bits. We only consume what the forwarder needs (picture ID, TID,
-// SID, keyframe flag, last-in-frame flag).
+// keyframe flag), tracking off solely to bounds-check those reads.
 func (*vp9) Parse(pkt *rtp.Packet) (*dd.Descriptor, error) {
 	p := pkt.Payload
 	if len(p) < 1 {
@@ -45,7 +45,6 @@ func (*vp9) Parse(pkt *rtp.Packet) (*dd.Descriptor, error) {
 	lBit := head&0x20 != 0
 	fBit := head&0x10 != 0
 	bBit := head&0x08 != 0
-	eBit := head&0x04 != 0
 
 	off := 1
 	var pictureID uint16
@@ -64,23 +63,18 @@ func (*vp9) Parse(pkt *rtp.Packet) (*dd.Descriptor, error) {
 			off++
 		}
 	}
-	var tid, sid uint8
+	var tid uint8
 	if lBit {
 		if off >= len(p) {
 			return nil, errVP9ShortPayload
 		}
-		layers := p[off]
-		tid = (layers >> 5) & 0x07
-		sid = (layers >> 1) & 0x07
+		tid = (p[off] >> 5) & 0x07
 		off++
-		if !fBit {
-			if off >= len(p) {
-				return nil, errVP9ShortPayload
-			}
-			off++
+		// Flex byte (present when F=0) must exist for a well-formed packet.
+		if !fBit && off >= len(p) {
+			return nil, errVP9ShortPayload
 		}
 	}
-	_ = off
 
 	// Keyframe markers in VP9 RTP: !P (not inter-predicted) AND B
 	// (start of frame). The B gate excludes intermediate packets of the
@@ -89,8 +83,6 @@ func (*vp9) Parse(pkt *rtp.Packet) (*dd.Descriptor, error) {
 	return &dd.Descriptor{
 		FrameNumber:   pictureID,
 		TemporalLayer: tid,
-		SpatialLayer:  sid,
 		IsKeyframe:    !pBit && bBit,
-		IsLastInFrame: eBit,
 	}, nil
 }

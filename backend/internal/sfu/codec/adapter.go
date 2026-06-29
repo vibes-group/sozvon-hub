@@ -39,7 +39,7 @@ func New(c protocol.ScreenVideoCodec) Adapter {
 	case protocol.ScreenVideoCodecAV1:
 		return newAV1()
 	case protocol.ScreenVideoCodecVP9:
-		return newVP9()
+		return &vp9{}
 	default:
 		return &noop{name: c}
 	}

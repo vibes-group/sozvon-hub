@@ -17,7 +17,6 @@ import {
   saveEngine,
   saveMicDeviceId,
   saveCamDeviceId,
-  loadPeerVolume,
 } from '../utils/storage';
 
 export type ChatMessage = {
@@ -267,5 +266,3 @@ export const useStore = create<AppState>((set) => ({
       chat: s.chat.map((m) => (m.clientMsgId === clientMsgId ? { ...m, attachments } : m)),
     })),
 }));
-
-export { loadPeerVolume };

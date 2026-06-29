@@ -86,7 +86,6 @@ export type ConnectOptions = {
 
 export type SFUClient = {
   connect(opts: ConnectOptions): Promise<void>;
-  reconnect(opts: ConnectOptions): Promise<void>;
   disconnect(): void;
   setDisplayName(name: string): void;
   sendSetState(selfMuted: boolean, deafened: boolean): void;
@@ -257,63 +256,12 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     });
   }
 
-  function detachAudioAndWS(): void {
-    if (ws) {
-      ws.onopen = null;
-      ws.onerror = null;
-      ws.onclose = null;
-      ws.onmessage = null;
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
-    }
-    if (pc) {
-      pc.ontrack = null;
-      pc.onicecandidate = null;
-      pc.onconnectionstatechange = null;
-      try {
-        pc.close();
-      } catch {
-        /* ignore */
-      }
-      pc = null;
-    }
-  }
-
   function connect(opts: ConnectOptions): Promise<void> {
     if (ws || pc) throw new Error('sfu-client: already connected');
     stopped = false;
     iceServers = opts.iceServers ?? [];
     return setupAudioAndWS(opts).catch((err) => {
       disconnect();
-      throw err;
-    });
-  }
-
-  function reconnect(opts: ConnectOptions): Promise<void> {
-    if (stopped) throw new Error('sfu-client: cannot reconnect after disconnect');
-
-    detachAudioAndWS();
-
-    for (const id of Array.from(screenSubs.keys())) {
-      teardownScreenSub(id);
-    }
-    for (const id of Array.from(cameraSubs.keys())) {
-      teardownCameraSub(id);
-    }
-    screenShareCodecs.clear();
-    if (resumeContinuation) {
-      const cont = resumeContinuation;
-      resumeContinuation = null;
-      cont.reject(new Error('sfu-client: reconnect interrupted resume'));
-    }
-
-    iceServers = opts.iceServers ?? iceServers;
-    return setupAudioAndWS(opts).catch((err) => {
-      detachAudioAndWS();
       throw err;
     });
   }
@@ -1238,7 +1186,6 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
 
   return {
     connect,
-    reconnect,
     disconnect,
     setDisplayName,
     sendSetState,

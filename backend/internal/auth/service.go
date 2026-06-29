@@ -111,7 +111,7 @@ func (s *Service) RegisterWithInvite(ctx context.Context, inviteToken, username,
 		return "", User{}, ErrInviteRequired
 	}
 	inviteTokenHash := sha256.Sum256([]byte(inviteToken))
-	return s.createUserSession(ctx, username, password, func(ctx context.Context, tx *sql.Tx, _ string) (bool, string, error) {
+	return s.createUserSession(ctx, username, password, func(ctx context.Context, tx *sql.Tx) (bool, string, error) {
 		now := time.Now().UTC().Format(timeFormat)
 		// Consume the invite and read what it grants in one atomic step.
 		var grant int
@@ -137,7 +137,7 @@ func (s *Service) RegisterWithInvite(ctx context.Context, inviteToken, username,
 func (s *Service) createUserSession(
 	ctx context.Context,
 	username, password string,
-	prep func(context.Context, *sql.Tx, string) (canInvite bool, adminNote string, err error),
+	prep func(context.Context, *sql.Tx) (canInvite bool, adminNote string, err error),
 ) (string, User, error) {
 	normalizedUsername, err := normalizeUsername(username)
 	if err != nil {
@@ -166,22 +166,14 @@ func (s *Service) createUserSession(
 	}
 	defer tx.Rollback()
 
-	var canInvite bool
-	var adminNote string
-	if prep != nil {
-		canInvite, adminNote, err = prep(ctx, tx, userID)
-		if err != nil {
-			return "", User{}, err
-		}
+	canInvite, adminNote, err := prep(ctx, tx)
+	if err != nil {
+		return "", User{}, err
 	}
 
-	canInviteInt := 0
-	if canInvite {
-		canInviteInt = 1
-	}
 	if _, err := tx.ExecContext(ctx,
 		`insert into users (id, username, name, password_hash, can_invite, admin_note) values (?, ?, ?, ?, ?, ?)`,
-		userID, normalizedUsername, normalizedUsername, passwordHash, canInviteInt, adminNote,
+		userID, normalizedUsername, normalizedUsername, passwordHash, boolToInt(canInvite), adminNote,
 	); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return "", User{}, ErrUsernameTaken
@@ -248,14 +240,10 @@ func (s *Service) CreateInvite(ctx context.Context, inviterUserID string, grantC
 	if inviterUserID != "" {
 		invitedBy = inviterUserID
 	}
-	grantInt := 0
-	if grantCanInvite {
-		grantInt = 1
-	}
 	if _, err := s.db.ExecContext(ctx, `
 		insert into account_invites (id, token_hash, invited_by, expires_at, grant_can_invite, admin_note)
 		values (?, ?, ?, ?, ?, ?)
-	`, inviteID, tokenHash[:], invitedBy, expiresAt, grantInt, note); err != nil {
+	`, inviteID, tokenHash[:], invitedBy, expiresAt, boolToInt(grantCanInvite), note); err != nil {
 		return Invite{}, fmt.Errorf("insert invite: %w", err)
 	}
 
@@ -657,6 +645,14 @@ func normalizeAdminNote(note string) (string, error) {
 		return "", errors.New("invalid_note")
 	}
 	return normalized, nil
+}
+
+// boolToInt maps a bool to the 0/1 integer SQLite's driver stores for booleans.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func validatePassword(password string) error {

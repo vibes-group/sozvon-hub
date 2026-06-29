@@ -666,7 +666,8 @@ func (r *Room) handleClientMessage(p *peer, msg protocol.Envelope) {
 		if err := json.Unmarshal(msg.Data, &d); err != nil {
 			return
 		}
-		r.handleScreenShareUnsubscribe(p, d)
+		// Client-initiated path; shares cleanup with the connection-failed branch.
+		r.removeScreenSubscriber(p, d.PublisherID, "client requested")
 	case "screen-share-mode-change":
 		var d protocol.ScreenShareModeChangeData
 		if err := json.Unmarshal(msg.Data, &d); err != nil {
@@ -692,7 +693,7 @@ func (r *Room) handleClientMessage(p *peer, msg protocol.Envelope) {
 		if err := json.Unmarshal(msg.Data, &d); err != nil {
 			return
 		}
-		r.handleCameraUnsubscribe(p, d)
+		r.removeCameraSubscriber(p, d.PublisherID, "client requested")
 	}
 }
 

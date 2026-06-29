@@ -595,13 +595,6 @@ func (r *Room) handleScreenShareModeChange(p *peer, data protocol.ScreenShareMod
 	log.Printf("sfu: screen-share mode-change pub=%s mode=%s", session.PublisherID, data.Mode)
 }
 
-// handleScreenShareUnsubscribe is the client-initiated path. It defers
-// to removeScreenSubscriber, which is also the cleanup path for the
-// connection-state-failed branch.
-func (r *Room) handleScreenShareUnsubscribe(sub *peer, data protocol.ScreenShareUnsubscribeData) {
-	r.removeScreenSubscriber(sub, data.PublisherID, "client requested")
-}
-
 // removeScreenSubscriber tears down the subscriber's per-publisher PC.
 // Idempotent: safe to call from both the unsubscribe handler and the
 // OnConnectionStateChange callback.

@@ -1,9 +1,6 @@
 package rooms
 
-import (
-	"crypto/rand"
-	"math/big"
-)
+import "math/rand/v2"
 
 // Room names evoke a place — a calm spot to gather — and use ambiance words, a
 // deliberately different theme from guest display names (which are animal
@@ -27,16 +24,5 @@ var roomNouns = []string{
 // the creator leaves the name blank. The slug stays the unique handle, so an
 // occasional duplicate name is harmless.
 func generateName() string {
-	return roomAdjectives[randIndex(len(roomAdjectives))] + " " + roomNouns[randIndex(len(roomNouns))]
-}
-
-func randIndex(n int) int {
-	if n <= 0 {
-		return 0
-	}
-	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
-	if err != nil {
-		return 0
-	}
-	return int(v.Int64())
+	return roomAdjectives[rand.IntN(len(roomAdjectives))] + " " + roomNouns[rand.IntN(len(roomNouns))]
 }

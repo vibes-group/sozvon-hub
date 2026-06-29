@@ -12,8 +12,6 @@ export const SCREEN_RESOLUTIONS: readonly ScreenResolution[] = [
   '2160',
 ] as const;
 export const SCREEN_FPS_OPTIONS: readonly ScreenFps[] = [15, 30, 60] as const;
-export const SCREEN_CODEC_OPTIONS: readonly ScreenCodecPref[] = ['av1', 'vp9'] as const;
-export const SHARE_MODES: readonly ShareMode[] = ['sharp', 'motion'] as const;
 
 export const DEFAULT_SCREEN_RESOLUTION: ScreenResolution = '1440';
 export const DEFAULT_SCREEN_FPS: ScreenFps = 60;

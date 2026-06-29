@@ -365,7 +365,8 @@ func (r *Room) handleCameraSubscribe(sub *peer, data protocol.CameraSubscribeDat
 	sub.cameraSubs[session.PublisherID] = &cameraSubPC{pc: pc}
 	r.mu.Unlock()
 
-	go r.forwardCameraVideoRTCPToPublisher(session, subEntry.videoSender)
+	// nil onReport: camera has no auto-downgrade loop, so RR loss is unused.
+	go forwardRTCP(&session.publisherVideoSSRC, session.publisherPC, subEntry.videoSender, nil)
 
 	offerData, err := json.Marshal(protocol.OfferEnvelope{
 		PC:                 protocol.PCCameraSub,
@@ -451,11 +452,6 @@ func (r *Room) setupCameraSubPC(sub *peer, session *CameraSession) (pc *webrtc.P
 	return pc, subEntry, offer, nil
 }
 
-// handleCameraUnsubscribe is the client-initiated teardown path.
-func (r *Room) handleCameraUnsubscribe(sub *peer, data protocol.CameraUnsubscribeData) {
-	r.removeCameraSubscriber(sub, data.PublisherID, "client requested")
-}
-
 // removeCameraSubscriber tears down the subscriber's per-publisher PC.
 // Idempotent.
 func (r *Room) removeCameraSubscriber(sub *peer, publisherID, reason string) {
@@ -519,45 +515,6 @@ func (s *CameraSession) requestKeyframe() {
 	_ = s.publisherPC.WriteRTCP([]rtcp.Packet{
 		&rtcp.PictureLossIndication{MediaSSRC: pubSSRC},
 	})
-}
-
-// forwardCameraVideoRTCPToPublisher relays PLI/FIR from a subscriber's video
-// sender to the publisher PC, retargeting MediaSSRC to the publisher's SSRC.
-func (r *Room) forwardCameraVideoRTCPToPublisher(session *CameraSession, sender *webrtc.RTPSender) {
-	buf := make([]byte, 1500)
-	for {
-		n, _, err := sender.Read(buf)
-		if err != nil {
-			return
-		}
-		pkts, err := rtcp.Unmarshal(buf[:n])
-		if err != nil {
-			continue
-		}
-		var forward []rtcp.Packet
-		for _, pkt := range pkts {
-			switch pkt.(type) {
-			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				forward = append(forward, pkt)
-			}
-		}
-		if len(forward) == 0 {
-			continue
-		}
-		pubSSRC := session.publisherVideoSSRC.Load()
-		if pubSSRC == 0 {
-			continue
-		}
-		for _, pkt := range forward {
-			switch p := pkt.(type) {
-			case *rtcp.PictureLossIndication:
-				p.MediaSSRC = pubSSRC
-			case *rtcp.FullIntraRequest:
-				p.MediaSSRC = pubSSRC
-			}
-		}
-		_ = session.publisherPC.WriteRTCP(forward)
-	}
 }
 
 // forward writes one inbound RTP packet to the subscriber's track, rewriting the

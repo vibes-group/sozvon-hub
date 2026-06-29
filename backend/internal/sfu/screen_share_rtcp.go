@@ -1,16 +1,20 @@
 package sfu
 
 import (
+	"sync/atomic"
+
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
-// forwardRTCPToPublisher relays PLI/FIR from a subscriber sender to the
-// publisher PC, rewriting MediaSSRC to the publisher's video SSRC. When
-// onReport is non-nil it is called for every ReceiverReport seen, allowing
-// callers to harvest per-subscriber loss stats.
-func (r *Room) forwardRTCPToPublisher(
-	session *ScreenShareSession,
+// forwardRTCP relays PLI/FIR from a subscriber sender to the publisher PC,
+// rewriting MediaSSRC to the publisher's current video SSRC. When onReport is
+// non-nil it is called for every ReceiverReport seen, letting callers harvest
+// per-subscriber loss stats. Runs until sender.Read errors (subscriber gone).
+// Shared by the screen-share and camera forward paths.
+func forwardRTCP(
+	pubSSRC *atomic.Uint32,
+	publisherPC *webrtc.PeerConnection,
 	sender *webrtc.RTPSender,
 	onReport func(*rtcp.ReceiverReport),
 ) {
@@ -38,19 +42,19 @@ func (r *Room) forwardRTCPToPublisher(
 		if len(forward) == 0 {
 			continue
 		}
-		pubSSRC := session.publisherVideoSSRC.Load()
-		if pubSSRC == 0 {
+		ssrc := pubSSRC.Load()
+		if ssrc == 0 {
 			continue
 		}
 		for _, pkt := range forward {
 			switch p := pkt.(type) {
 			case *rtcp.PictureLossIndication:
-				p.MediaSSRC = pubSSRC
+				p.MediaSSRC = ssrc
 			case *rtcp.FullIntraRequest:
-				p.MediaSSRC = pubSSRC
+				p.MediaSSRC = ssrc
 			}
 		}
-		_ = session.publisherPC.WriteRTCP(forward)
+		_ = publisherPC.WriteRTCP(forward)
 	}
 }
 
@@ -58,7 +62,7 @@ func (r *Room) forwardRTCPToPublisher(
 // sender to the publisher's PC and harvests ReceiverReport.FractionLost into
 // sub.lossPerMille for the auto-downgrade loop.
 func (r *Room) forwardScreenVideoRTCPToPublisher(session *ScreenShareSession, sub *screenSubscriber, sender *webrtc.RTPSender) {
-	r.forwardRTCPToPublisher(session, sender, func(p *rtcp.ReceiverReport) {
+	forwardRTCP(&session.publisherVideoSSRC, session.publisherPC, sender, func(p *rtcp.ReceiverReport) {
 		if len(p.Reports) > 0 {
 			// A compound RR may carry blocks for both video and audio SSRCs
 			// (RFC 3550 §6.4.1). Take the worst loss across all blocks —

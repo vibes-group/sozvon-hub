@@ -101,15 +101,14 @@ func main() {
 	defer fileStore.Close()
 
 	roomManager := rooms.NewManager(database, rooms.Config{
-		ICEServers:    iceServers,
-		NAT1To1IPs:    nat1To1,
-		UDPPortMin:    cfg.UDPPortMin,
-		UDPPortMax:    cfg.UDPPortMax,
-		AppHostname:   cfg.AppHostname,
-		RoomTTL:       cfg.RoomTTL,
-		GracePeriod:   cfg.RoomGrace,
-		SweepInterval: time.Minute,
-		FileStore:     fileStore,
+		ICEServers:  iceServers,
+		NAT1To1IPs:  nat1To1,
+		UDPPortMin:  cfg.UDPPortMin,
+		UDPPortMax:  cfg.UDPPortMax,
+		AppHostname: cfg.AppHostname,
+		RoomTTL:     cfg.RoomTTL,
+		GracePeriod: cfg.RoomGrace,
+		FileStore:   fileStore,
 	})
 	sweepCtx, sweepCancel := context.WithCancel(ctx)
 	defer sweepCancel()

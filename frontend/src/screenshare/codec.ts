@@ -4,7 +4,7 @@ import type { ScreenVideoCodec } from '../sfu/protocol';
 
 type Codec = RTCRtpCodec & { mimeType: string };
 
-export type ScreenCodecSupport = {
+type ScreenCodecSupport = {
   send: ReadonlySet<ScreenVideoCodec>;
   receive: ReadonlySet<ScreenVideoCodec>;
   av1HardwareLikely: boolean | null;
@@ -122,7 +122,7 @@ export function canReceiveScreenCodec(codec: ScreenVideoCodec): boolean {
   return getScreenCodecSupportSync().receive.has(codec);
 }
 
-export function orderScreenCodecs<T extends Codec>(
+function orderScreenCodecs<T extends Codec>(
   codecs: readonly T[],
   preferred: ScreenVideoCodec,
 ): T[] {

@@ -19,8 +19,6 @@ type bitReader struct {
 	bitPos int
 }
 
-func newBitReader(buf []byte) *bitReader { return &bitReader{buf: buf} }
-
 func (r *bitReader) remaining() int { return len(r.buf)*8 - r.bitPos }
 
 // ok returns false once the reader has been read past the end of the buffer.

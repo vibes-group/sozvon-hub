@@ -30,16 +30,6 @@ const RTPExtensionURI = "https://aomediacodec.github.io/av1-rtp-spec/#dependency
 // unbounded memory.
 const maxTemplates = 64
 
-// DecodeTarget is one entry in a structure's decode-target list. A
-// subscriber picks one target (e.g. spatial=0, temporal=2) and the SFU
-// forwards only the packets that contribute to that target. Active mirrors
-// the bit at position i in the running active_decode_targets_bitmask.
-type DecodeTarget struct {
-	SpatialLayer  uint8
-	TemporalLayer uint8
-	Active        bool
-}
-
 // Descriptor is the parsed form of one DD-bearing RTP packet, projected
 // onto the fields the SFU forward path actually consumes.
 //
@@ -48,19 +38,12 @@ type DecodeTarget struct {
 //   - ChainDiffs is per-chain (NumChains entries) for THIS frame: each
 //     value is (currentFrameNumber - prevFrameNumberInChain) clamped to
 //     uint8. ChainTracker reads this to detect missing predecessors.
-//   - DecodeTargets is non-nil only when AttachesStructure == true; it
-//     reflects the freshly absorbed FrameDependencyStructure. For all
-//     other packets it stays nil — the caller is expected to retain the
-//     last seen structure separately if needed.
 type Descriptor struct {
 	FrameNumber       uint16
 	TemporalLayer     uint8
-	SpatialLayer      uint8
 	IsKeyframe        bool
-	IsLastInFrame     bool
 	AttachesStructure bool
 	ChainDiffs        []uint8
-	DecodeTargets     []DecodeTarget
 }
 
 // Parser converts the raw DD extension bytes for one packet into a
@@ -96,9 +79,7 @@ var errTooManyTemplates = errors.New("dd: structure exceeds 64 templates")
 // structure is cached (the parser hands out copies when callers need to
 // modify them, e.g. custom_chains in a frame-dependency-definition).
 type frameTemplate struct {
-	spatial    uint8
 	temporal   uint8
-	dti        []uint8 // DTI per decode target — 0 = NotPresent
 	fdiffs     []uint8 // f_diff values, all minus-one-decoded
 	chainDiffs []uint8 // one chain_diff per chain
 }
@@ -115,9 +96,7 @@ type frameStructure struct {
 }
 
 type parser struct {
-	structure  *frameStructure
-	activeMask uint32
-	maskKnown  bool
+	structure *frameStructure
 }
 
 func (p *parser) Parse(extData []byte) (*Descriptor, error) {
@@ -125,17 +104,16 @@ func (p *parser) Parse(extData []byte) (*Descriptor, error) {
 		return nil, nil
 	}
 
-	br := newBitReader(extData)
+	br := &bitReader{buf: extData}
 
 	// Mandatory descriptor: 3 bytes, present on every DD packet.
-	// start_of_frame is consumed but not surfaced — the SFU doesn't need
-	// it; pion's RTP marker bit already conveys "start of frame" semantics
-	// for VP9/AV1 packetisers we care about.
+	// start_of_frame and end_of_frame are consumed but not surfaced — the
+	// SFU doesn't need them; pion's RTP marker bit already conveys frame
+	// boundaries for the VP9/AV1 packetisers we care about.
 	if _, err := br.readBool(); err != nil {
 		return nil, err
 	}
-	endOfFrame, err := br.readBool()
-	if err != nil {
+	if _, err := br.readBool(); err != nil {
 		return nil, err
 	}
 	templateID, err := br.read(6)
@@ -187,10 +165,6 @@ func (p *parser) Parse(extData []byte) (*Descriptor, error) {
 	// told us the template table changed.
 	if attachedStructure != nil {
 		p.structure = attachedStructure
-		// Default active mask: every decode target active. Overwritten
-		// below if active_decode_targets_present_flag was also set.
-		p.activeMask = (uint32(1) << attachedStructure.numDecodeTargets) - 1
-		p.maskKnown = true
 	}
 	if p.structure == nil {
 		return nil, errNoStructure
@@ -198,12 +172,11 @@ func (p *parser) Parse(extData []byte) (*Descriptor, error) {
 	structure := p.structure
 
 	if activeDTPresent {
-		mask, err := br.read(structure.numDecodeTargets)
-		if err != nil {
+		// active_decode_targets_bitmask — consumed for alignment only; the
+		// SFU forwards on chain info, not per-target activity.
+		if _, err := br.read(structure.numDecodeTargets); err != nil {
 			return nil, err
 		}
-		p.activeMask = mask
-		p.maskKnown = true
 	}
 
 	// frame_dependency_definition: pull layer/chain info from the matched
@@ -266,19 +239,13 @@ func (p *parser) Parse(extData []byte) (*Descriptor, error) {
 		copy(chainDiffs, tmpl.chainDiffs)
 	}
 
-	out := &Descriptor{
+	return &Descriptor{
 		FrameNumber:       uint16(frameNum),
 		TemporalLayer:     tmpl.temporal,
-		SpatialLayer:      tmpl.spatial,
 		IsKeyframe:        fdiffCount == 0,
-		IsLastInFrame:     endOfFrame,
 		AttachesStructure: attachedStructure != nil,
 		ChainDiffs:        chainDiffs,
-	}
-	if out.AttachesStructure {
-		out.DecodeTargets = buildDecodeTargets(structure, p.activeMask, p.maskKnown)
-	}
-	return out, nil
+	}, nil
 }
 
 // parseStructure reads one template_dependency_structure() block. Layout
@@ -315,7 +282,7 @@ func parseStructure(br *bitReader) (*frameStructure, error) {
 		if len(s.templates) >= maxTemplates {
 			return nil, errTooManyTemplates
 		}
-		s.templates = append(s.templates, frameTemplate{spatial: spatial, temporal: temporal})
+		s.templates = append(s.templates, frameTemplate{temporal: temporal})
 
 		idc, err := br.read(2)
 		if err != nil {
@@ -336,15 +303,14 @@ func parseStructure(br *bitReader) (*frameStructure, error) {
 	}
 	s.spatialLayers = int(spatial) + 1
 
-	// Template DTIs: 2 bits per (template × decodeTarget).
-	for i := range s.templates {
-		s.templates[i].dti = make([]uint8, s.numDecodeTargets)
-		for j := range s.numDecodeTargets {
-			v, err := br.read(2)
-			if err != nil {
+	// Template DTIs: 2 bits per (template × decodeTarget). Read and discard
+	// — the SFU forwards on chain info alone — but the bits must be consumed
+	// to keep the reader aligned for the fdiff/chain blocks that follow.
+	for range s.templates {
+		for range s.numDecodeTargets {
+			if _, err := br.read(2); err != nil {
 				return nil, err
 			}
-			s.templates[i].dti[j] = uint8(v)
 		}
 	}
 
@@ -418,31 +384,4 @@ func parseStructure(br *bitReader) (*frameStructure, error) {
 	}
 
 	return s, nil
-}
-
-// buildDecodeTargets projects the cached structure onto an externally-
-// visible decode-target list. For each target, the (spatial, temporal)
-// pair is the highest layer that has a non-NotPresent DTI for that
-// target — matches the convention selectors use to compute "this target
-// is reachable up to layer X".
-func buildDecodeTargets(s *frameStructure, mask uint32, maskKnown bool) []DecodeTarget {
-	out := make([]DecodeTarget, s.numDecodeTargets)
-	for tgt := range s.numDecodeTargets {
-		out[tgt].Active = !maskKnown || mask&(uint32(1)<<tgt) != 0
-		for _, tmpl := range s.templates {
-			if tgt >= len(tmpl.dti) {
-				continue
-			}
-			if tmpl.dti[tgt] == 0 { // DecodeTargetNotPresent
-				continue
-			}
-			if tmpl.spatial > out[tgt].SpatialLayer {
-				out[tgt].SpatialLayer = tmpl.spatial
-			}
-			if tmpl.temporal > out[tgt].TemporalLayer {
-				out[tgt].TemporalLayer = tmpl.temporal
-			}
-		}
-	}
-	return out
 }
