@@ -2,7 +2,7 @@
 // speaker-view filmstrip (StageView). A tile fills the box its parent gives it;
 // sizing/aspect is decided by the layout, not the tile.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Maximize2, Mic, MicOff, ScreenShare, Video, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useCameraStore } from '../store/useCameraStore';
@@ -38,9 +38,18 @@ function useReportAspect(
   }, [videoRef, active]);
 }
 
-function PinButton({ onClick, label }: { onClick: () => void; label: string }) {
+// Touch devices have no hover, so the hover-revealed tile controls (pin button,
+// per-participant volume) are unreachable. On `hover: none` a tap reveals them
+// instead — desktop keeps the hover behaviour.
+const IS_TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches;
+
+function PinButton({ onClick, label, revealed }: { onClick: () => void; label: string; revealed?: boolean }) {
   return (
-    <div className="pointer-events-none absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+    <div
+      className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 ${
+        revealed ? 'opacity-100' : 'opacity-0'
+      }`}
+    >
       <button
         type="button"
         onClick={onClick}
@@ -74,6 +83,10 @@ export function CameraTile({
   const showVideo = !!p.cameraOn && !!stream;
   const isRemote = !p.isSelf;
   const isFilm = variant === 'film';
+
+  // On touch, a tap on a grid tile reveals the hover controls (pin + volume).
+  const [revealed, setRevealed] = useState(false);
+  const tapReveal = IS_TOUCH && !isFilm;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
@@ -113,10 +126,14 @@ export function CameraTile({
 
   return (
     <div
-      onClick={isFilm && onPin ? onPin : undefined}
+      onClick={
+        isFilm && onPin ? onPin : tapReveal ? () => setRevealed((v) => !v) : undefined
+      }
       className={`group relative h-full w-full overflow-hidden border bg-bg-2 ${
         speakingRing ? 'border-accent' : 'border-line'
-      } transition-[border-color] duration-150 ${isFilm && onPin ? 'cursor-pointer' : ''}`}
+      } transition-[border-color] duration-150 ${
+        (isFilm && onPin) || tapReveal ? 'cursor-pointer' : ''
+      }`}
     >
       {showVideo ? (
         <video
@@ -137,11 +154,16 @@ export function CameraTile({
         </div>
       )}
 
-      {/* Pin-to-stage affordance — centered on hover for grid tiles. */}
-      {!isFilm && onPin && <PinButton onClick={onPin} label="Развернуть" />}
+      {/* Pin-to-stage affordance — centered on hover (desktop) or tap (touch). */}
+      {!isFilm && onPin && <PinButton onClick={onPin} label="Развернуть" revealed={revealed} />}
 
       {!isFilm && isRemote && (
-        <div className="absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 ${
+            revealed ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
           <button
             type="button"
             onClick={toggleLocalMute}

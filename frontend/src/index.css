@@ -210,3 +210,15 @@
     opacity: 1;
   }
 }
+
+/* Mobile: iOS Safari zooms the page when a focused field has a font smaller
+   than 16px. Bump form controls to 16px on phones so focusing never zooms.
+   Left unlayered on purpose — it must win over Tailwind's utility-layer
+   `text-[13px]/[14px]` on these elements. Desktop is untouched. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

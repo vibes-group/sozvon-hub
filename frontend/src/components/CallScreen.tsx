@@ -371,8 +371,8 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   return (
     <>
       <main className="h-dvh overflow-hidden bg-bg-0 text-body flex flex-col">
-        <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-line shrink-0">
-          <div className="flex items-baseline gap-3 min-w-0">
+        <header className="flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] border-b border-line shrink-0">
+          <div className="flex items-baseline gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={handleLeave}
@@ -385,7 +385,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
               комната {roomSlug}
             </span>
           </div>
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
             <span
               className={`hidden sm:block text-[12px] truncate ${
                 statusState === 'err' ? 'text-danger' : statusState === 'ok' ? 'text-good' : 'text-muted-2'
@@ -426,7 +426,11 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
         )}
 
         <div className="flex-1 min-h-0 flex">
-          <section className="flex-1 min-w-0 min-h-0 overflow-hidden p-4">
+          <section
+            className={`flex-1 min-w-0 min-h-0 overflow-hidden p-4 ${
+              chatOpen ? 'hidden md:block' : ''
+            }`}
+          >
             {stage ? (
               <StageView
                 stage={stage}
@@ -439,7 +443,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             )}
           </section>
           {chatOpen && (
-            <div className="w-full max-w-[380px] shrink-0 flex flex-col min-h-0 p-3 pl-0">
+            <div className="w-full md:max-w-[380px] shrink-0 flex flex-col min-h-0 p-3 md:pl-0">
               <ChatPanel
                 roomId={roomSlug}
                 onSend={session.sendChat}
@@ -449,7 +453,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
           )}
         </div>
 
-        <footer className="border-t border-line bg-bg-0/95 backdrop-blur px-4 py-3 shrink-0">
+        <footer className="border-t border-line bg-bg-0/95 backdrop-blur px-4 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shrink-0">
           <ControlsBar
             onToggleMic={handleToggleMic}
             onToggleCamera={handleToggleCamera}

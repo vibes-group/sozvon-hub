@@ -71,11 +71,19 @@ export default function HomePage() {
           <RoomsCard />
         ) : inviteToken ? (
           <RegisterForm inviteToken={inviteToken} onAuthed={setMe} />
-        ) : (
-          <div className="grid gap-6">
-            {showLogin && <LoginForm onAuthed={setMe} />}
-            <RecentRoomsCard />
+        ) : showLogin ? (
+          <div className="grid gap-3">
+            <LoginForm onAuthed={setMe} />
+            <button
+              type="button"
+              onClick={() => setShowLogin(false)}
+              className="text-center text-[12px] text-muted-2 transition-colors hover:text-muted"
+            >
+              Назад
+            </button>
           </div>
+        ) : (
+          <RecentRoomsCard />
         )}
       </div>
     </main>
