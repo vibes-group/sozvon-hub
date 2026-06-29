@@ -537,14 +537,15 @@ func (m *Manager) sweep(ctx context.Context) {
 }
 
 // endRoomsEmptyPast ends active rooms that have sat empty longer than the grace
-// period, tearing down any live SFU room and deleting the room's files. Each end
-// is a guarded UPDATE: if a reconnect cleared empty_since after the room was
-// selected, the row no longer matches and the room is left alone.
+// period, then tears down any live SFU room and deletes the room's files. The
+// UPDATE…RETURNING is atomic, so a reconnect that cleared empty_since simply
+// keeps that row out of the result — no separate select or per-row guard needed.
 func (m *Manager) endRoomsEmptyPast(ctx context.Context, cutoff, now string) {
 	rows, err := m.db.QueryContext(ctx, `
-		select slug from rooms
+		update rooms set status = 'ended', ended_at = ?, updated_at = ?
 		where status = 'active' and empty_since is not null and empty_since <= ?
-	`, cutoff)
+		returning slug
+	`, now, now, cutoff)
 	if err != nil {
 		log.Printf("rooms: sweep empty: %v", err)
 		return
@@ -566,17 +567,6 @@ func (m *Manager) endRoomsEmptyPast(ctx context.Context, cutoff, now string) {
 	}
 
 	for _, slug := range slugs {
-		res, err := m.db.ExecContext(ctx, `
-			update rooms set status = 'ended', ended_at = ?, updated_at = ?
-			where slug = ? and status = 'active' and empty_since is not null and empty_since <= ?
-		`, now, now, slug, cutoff)
-		if err != nil {
-			log.Printf("rooms: end empty %q: %v", slug, err)
-			continue
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			continue // reconnected since selection — empty_since cleared
-		}
 		m.teardownLive(slug)
 		if m.cfg.FileStore != nil {
 			m.cfg.FileStore.DeleteRoom(slug)
