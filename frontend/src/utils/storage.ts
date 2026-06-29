@@ -3,6 +3,7 @@
 
 import type { EngineKind } from '../types';
 import { ENGINE_IDS } from '../audio/engine';
+import { IS_DESKTOP } from './devices';
 
 export const KEYS = {
   // Audio / engine
@@ -207,7 +208,10 @@ const ENGINE_VALUES: EngineKind[] = ['off', ...ENGINE_IDS];
 
 export function loadEngine(): EngineKind {
   const raw = localStorage.getItem(KEYS.engine);
-  return ENGINE_VALUES.includes(raw as EngineKind) ? (raw as EngineKind) : 'browser';
+  if (ENGINE_VALUES.includes(raw as EngineKind)) return raw as EngineKind;
+  // Desktops can afford the RNNoise WASM denoiser by default; phones/tablets
+  // fall through to the lighter browser engine.
+  return IS_DESKTOP ? 'rnnoise' : 'browser';
 }
 
 export function saveEngine(e: EngineKind): void {

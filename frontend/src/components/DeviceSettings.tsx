@@ -4,6 +4,7 @@ import { useStore } from '../store/useStore';
 import { ENGINE_OPTIONS, type ActiveEngineKind } from '../audio/engine';
 import type { EngineKind } from '../types';
 import { Toggle } from './Toggle';
+import { useInputDevices } from '../utils/devices';
 
 type Props = {
   onEngineSelect: (engine: EngineKind) => void;
@@ -13,39 +14,6 @@ type Props = {
   onOutputVolumeChange: (v: number) => void;
   onReset: () => void;
 };
-
-function useDevices(kind: MediaDeviceKind): MediaDeviceInfo[] {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      navigator.mediaDevices
-        ?.enumerateDevices()
-        .then((all) => {
-          if (cancelled) return;
-          // Drop the synthetic "default"/"communications" aliases (and any
-          // empty id) so each real device shows once — matches voice-hub.
-          setDevices(
-            all.filter(
-              (d) =>
-                d.kind === kind &&
-                d.deviceId &&
-                d.deviceId !== 'default' &&
-                d.deviceId !== 'communications',
-            ),
-          );
-        })
-        .catch(() => {});
-    };
-    refresh();
-    navigator.mediaDevices?.addEventListener('devicechange', refresh);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
-    };
-  }, [kind]);
-  return devices;
-}
 
 function SliderHead({ label, value }: { label: string; value: string }) {
   return (
@@ -110,8 +78,8 @@ export function DeviceSettings({
     if (engine !== 'off') setLastVariant(engine);
   }, [engine]);
 
-  const mics = useDevices('audioinput');
-  const cams = useDevices('videoinput');
+  const mics = useInputDevices('audioinput');
+  const cams = useInputDevices('videoinput');
 
   return (
     <section className="card grid gap-5">

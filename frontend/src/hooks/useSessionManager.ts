@@ -491,6 +491,10 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
   const switchCamDevice = useCallback(async (): Promise<void> => {
     const client = sfu.getClient();
     if (!client || !client.isPublishingCamera()) return;
+    // Release the current camera before re-capturing: on phones the front and
+    // back cameras can't be open simultaneously, so opening the new device
+    // while the old track is still live throws NotReadableError.
+    client.releaseCameraTrack();
     const stream = await openCameraStream();
     await client.replaceCameraTrack(stream);
   }, [sfu, openCameraStream]);

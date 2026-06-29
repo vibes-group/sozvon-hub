@@ -12,7 +12,7 @@ import { loadScreenAudioVolume, saveScreenAudioVolume } from '../utils/storage';
 import { useVideoFps, useVideoStream } from '../screenshare/useVideoFps';
 import type { ParticipantUI } from '../types';
 import type { StageTarget } from './tileLayout';
-import { AudioChip, CameraTile, ScreenShareTile, SelfScreenTile } from './CallTiles';
+import { AudioChip, CameraTile, ScreenShareTile, SelfScreenTile, shouldMirrorSelf } from './CallTiles';
 
 type Props = {
   stage: StageTarget;
@@ -136,7 +136,7 @@ function StageCamera({ participant: p }: { participant: ParticipantUI }) {
           ref={videoRef}
           autoPlay
           playsInline
-          className={`h-full w-full object-contain ${p.isSelf ? '-scale-x-100' : ''}`}
+          className={`h-full w-full object-contain ${p.isSelf && shouldMirrorSelf(stream) ? '-scale-x-100' : ''}`}
         />
       ) : (
         <div className="grid h-28 w-28 place-items-center rounded-full bg-bg-3 text-[40px] font-bold uppercase text-muted">

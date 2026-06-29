@@ -104,6 +104,7 @@ export type SFUClient = {
   resumeScreenShare(token: string): Promise<void>;
   startCamera(stream: MediaStream): Promise<void>;
   stopCamera(): void;
+  releaseCameraTrack(): void;
   replaceCameraTrack(stream: MediaStream): Promise<void>;
   subscribeCamera(publisherId: string): void;
   unsubscribeCamera(publisherId: string): void;
@@ -1060,6 +1061,18 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     on.onCameraSelfStopped();
   }
 
+  // Stop the current camera capture to free the hardware, leaving the
+  // publisher PC and sender intact: the sender keeps its (now-ended) track
+  // until replaceCameraTrack swaps in a fresh one. stop() does not fire
+  // 'ended', so the track's listener won't recurse into stopCamera().
+  function releaseCameraTrack(): void {
+    try {
+      cameraPubStream?.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Swap the published camera to a new capture (device change) without a
   // renegotiation: replaceTrack keeps the same VP8 sender, so the SFU and
   // subscribers see no interruption. The self-preview is refreshed via
@@ -1204,6 +1217,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     resumeScreenShare,
     startCamera,
     stopCamera,
+    releaseCameraTrack,
     replaceCameraTrack,
     subscribeCamera,
     unsubscribeCamera,

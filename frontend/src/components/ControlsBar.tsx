@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import {
   Mic,
   MicOff,
@@ -12,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
+import { useInputDevices } from '../utils/devices';
 
 type Props = {
   onToggleMic: () => void;
@@ -23,40 +23,6 @@ type Props = {
   // Hidden on devices without getDisplayMedia (mobile browsers).
   canScreenShare?: boolean;
 };
-
-// Number of real cameras available. ≥2 means a front/back pair (phones) where a
-// quick flip makes sense; device ids only populate once camera permission is
-// granted, so we re-count when the camera turns on.
-function useCameraCount(cameraOn: boolean): number {
-  const [count, setCount] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      navigator.mediaDevices
-        ?.enumerateDevices?.()
-        .then((all) => {
-          if (cancelled) return;
-          setCount(
-            all.filter(
-              (d) =>
-                d.kind === 'videoinput' &&
-                d.deviceId &&
-                d.deviceId !== 'default' &&
-                d.deviceId !== 'communications',
-            ).length,
-          );
-        })
-        .catch(() => {});
-    };
-    refresh();
-    navigator.mediaDevices?.addEventListener('devicechange', refresh);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
-    };
-  }, [cameraOn]);
-  return count;
-}
 
 type CtrlProps = {
   label: string;
@@ -148,7 +114,9 @@ export function ControlsBar({
   const deafened = useStore((s) => s.deafened);
   const cameraOn = useStore((s) => s.cameraOn);
   const sharing = useScreenShareStore((s) => s.myStatus === 'publishing' || s.myStatus === 'starting');
-  const canFlip = useCameraCount(cameraOn) >= 2 && !!onFlipCamera;
+  // ≥2 cameras means a front/back pair (phones) where a quick flip makes sense.
+  // Pass cameraOn so the list re-reads once permission populates device ids.
+  const canFlip = useInputDevices('videoinput', cameraOn).length >= 2 && !!onFlipCamera;
 
   return (
     <div className="flex items-center justify-center gap-3 flex-wrap">

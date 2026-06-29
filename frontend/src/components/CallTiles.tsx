@@ -7,6 +7,7 @@ import { Maximize2, Mic, MicOff, ScreenShare, Video, Volume2, VolumeX } from 'lu
 import { useStore } from '../store/useStore';
 import { useCameraStore } from '../store/useCameraStore';
 import { loadPeerVolume, savePeerVolume } from '../utils/storage';
+import { IS_TOUCH } from '../utils/devices';
 import type { ParticipantUI } from '../types';
 
 export type TileVariant = 'grid' | 'film';
@@ -38,10 +39,13 @@ function useReportAspect(
   }, [videoRef, active]);
 }
 
-// Touch devices have no hover, so the hover-revealed tile controls (pin button,
-// per-participant volume) are unreachable. On `hover: none` a tap reveals them
-// instead — desktop keeps the hover behaviour.
-const IS_TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover: none)').matches;
+// The self-preview is mirrored like a bathroom mirror for selfie cameras
+// (facingMode 'user') and for desktop webcams (facingMode unset). The rear
+// camera ('environment') must NOT be mirrored — its preview should match what
+// the lens actually sees.
+export function shouldMirrorSelf(stream: MediaStream | null): boolean {
+  return stream?.getVideoTracks()[0]?.getSettings().facingMode !== 'environment';
+}
 
 function PinButton({ onClick, label, revealed }: { onClick: () => void; label: string; revealed?: boolean }) {
   return (
@@ -140,7 +144,7 @@ export function CameraTile({
           ref={videoRef}
           autoPlay
           playsInline
-          className={`h-full w-full object-cover ${p.isSelf ? '-scale-x-100' : ''}`}
+          className={`h-full w-full object-cover ${p.isSelf && shouldMirrorSelf(stream) ? '-scale-x-100' : ''}`}
         />
       ) : (
         <div className="grid h-full w-full place-items-center">

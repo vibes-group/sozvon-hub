@@ -3,6 +3,8 @@ import { LayoutGrid, MessageSquare, Presentation, Share2, SlidersHorizontal, X }
 import { shareRoom } from '../api';
 import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
+import { useCameraStore } from '../store/useCameraStore';
+import { listInputDevices } from '../utils/devices';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { useSFU } from '../hooks/useSFU';
 import { useSessionManager } from '../hooks/useSessionManager';
@@ -240,15 +242,16 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   // is on.
   const handleFlipCamera = useCallback(async () => {
     try {
-      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
-        (d) =>
-          d.kind === 'videoinput' &&
-          d.deviceId &&
-          d.deviceId !== 'default' &&
-          d.deviceId !== 'communications',
-      );
+      const cams = await listInputDevices('videoinput');
       if (cams.length < 2) return;
-      const cur = useStore.getState().camDeviceId;
+      // Use the live track's real deviceId, not the stored camDeviceId — the
+      // latter is null when the camera started on the default device, which
+      // would make us cycle back to the camera already in use.
+      const liveId = useCameraStore
+        .getState()
+        .selfStream?.getVideoTracks()[0]
+        ?.getSettings().deviceId;
+      const cur = liveId ?? useStore.getState().camDeviceId;
       const idx = cams.findIndex((d) => d.deviceId === cur);
       const next = cams[(idx + 1) % cams.length];
       if (next.deviceId !== cur) await handleCamDeviceSelect(next.deviceId);
