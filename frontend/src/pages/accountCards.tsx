@@ -4,7 +4,6 @@ import {
   adminListUsers,
   adminUpdateUser,
   changePassword,
-  copyToClipboard,
   createInvite,
   listInvites,
   revokeInvite,
@@ -13,6 +12,7 @@ import {
   type Invite,
   type User,
 } from '../api';
+import { ShareButtons } from '../components/ShareButtons';
 import { absUrl, errText, fmtDateTime } from './accountShared';
 
 export function AdminUsersCard() {
@@ -323,7 +323,6 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshToken, setFreshToken] = useState<Invite | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [grantInvite, setGrantInvite] = useState(false);
   const [note, setNote] = useState('');
 
@@ -368,13 +367,6 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
     [refresh],
   );
 
-  const copyInvite = useCallback(async (inv: Invite) => {
-    const url = absUrl(inv.url);
-    if (!url || !(await copyToClipboard(url))) return;
-    setCopiedId(inv.id);
-    setTimeout(() => setCopiedId(null), 2000);
-  }, []);
-
   return (
     <section className="card grid gap-4">
       <h2 className="card-title">Приглашения</h2>
@@ -418,9 +410,7 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
               value={absUrl(freshToken.url)}
               onFocus={(e) => e.target.select()}
             />
-            <button className="btn btn-secondary shrink-0" onClick={() => copyInvite(freshToken)}>
-              {copiedId === freshToken.id ? 'Скопировано' : 'Копировать'}
-            </button>
+            <ShareButtons url={absUrl(freshToken.url)} title="Приглашение в Созвон" />
           </div>
           <p className="text-[12px] text-muted-2">Ссылка показывается один раз — сохраните её.</p>
         </div>

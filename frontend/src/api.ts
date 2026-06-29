@@ -231,14 +231,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-// Share a room link in one click. On mobile (where the Web Share API exists)
-// this opens the native share sheet; on desktop it falls back to copying the
-// link to the clipboard. A user-cancelled share sheet is not an error.
-export async function shareRoom(slug: string): Promise<'shared' | 'copied' | 'fail'> {
-  const url = roomUrl(slug);
+// Share a link in one click. On mobile (where the Web Share API exists) this
+// opens the native share sheet; on desktop it falls back to copying the link to
+// the clipboard. A user-cancelled share sheet is not an error.
+export async function shareUrl(url: string, title: string): Promise<'shared' | 'copied' | 'fail'> {
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
-      await navigator.share({ title: 'Созвон', url });
+      await navigator.share({ title, url });
       return 'shared';
     } catch (e) {
       // AbortError = user dismissed the sheet; treat as a no-op, not a failure.
@@ -249,11 +248,9 @@ export async function shareRoom(slug: string): Promise<'shared' | 'copied' | 'fa
   return (await copyToClipboard(url)) ? 'copied' : 'fail';
 }
 
-// Copy a room link to the clipboard. Unlike shareRoom this never opens the
-// native share sheet — it always copies. Returns false if the clipboard is
-// unavailable.
-export async function copyRoom(slug: string): Promise<boolean> {
-  return copyToClipboard(roomUrl(slug));
+// Share a room link in one click. See shareUrl for the mobile/desktop behaviour.
+export async function shareRoom(slug: string): Promise<'shared' | 'copied' | 'fail'> {
+  return shareUrl(roomUrl(slug), 'Созвон');
 }
 
 export async function adminListUsers(): Promise<AdminUserView[]> {

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { Check, Copy, LogOut, Pencil, Settings, Share2, X } from 'lucide-react';
+import { Check, LogOut, Pencil, Settings, X } from 'lucide-react';
 import {
-  copyRoom,
   createRoom,
   fetchMe,
   fetchRoom,
@@ -12,11 +11,12 @@ import {
   logout,
   register,
   renameRoom,
-  shareRoom,
+  roomUrl,
   type RoomCreated,
   type RoomSummary,
   type User,
 } from '../api';
+import { ShareButtons } from '../components/ShareButtons';
 import {
   listRecentRooms,
   removeRecentRoom,
@@ -129,7 +129,7 @@ function LoginForm({ onAuthed }: { onAuthed: (u: User) => void }) {
   const [busy, setBusy] = useState(false);
 
   const submit = useCallback(
-    async (e: React.FormEvent) => {
+    async (e: React.SubmitEvent<HTMLFormElement>) => {
       e.preventDefault();
       if (busy) return;
       setBusy(true);
@@ -263,7 +263,7 @@ function RegisterForm({
   const [busy, setBusy] = useState(false);
 
   const submit = useCallback(
-    async (e: React.FormEvent) => {
+    async (e: React.SubmitEvent<HTMLFormElement>) => {
       e.preventDefault();
       if (busy) return;
       setBusy(true);
@@ -394,7 +394,7 @@ function RoomsCard() {
               value={`${window.location.origin}${fresh.url}`}
               onFocus={(e) => e.target.select()}
             />
-            <RoomShareButtons slug={fresh.slug} />
+            <ShareButtons url={roomUrl(fresh.slug)} title="Созвон" />
           </div>
           {fresh.expiresAt && (
             <p className="text-[12px] text-muted-2">
@@ -457,47 +457,6 @@ type RoomRowProps = {
   room: RoomSummary;
   now: number;
 };
-
-// "Скопировать" + "Поделиться" pair shown next to a room link. Each instance
-// owns its own 2 s confirmation tick, so buttons never interfere.
-function RoomShareButtons({ slug }: { slug: string }) {
-  const [done, setDone] = useState<'copy' | 'share' | null>(null);
-
-  const flash = (action: 'copy' | 'share') => {
-    setDone(action);
-    setTimeout(() => setDone(null), 2000);
-  };
-
-  const copy = async () => {
-    if (await copyRoom(slug)) flash('copy');
-  };
-  const share = async () => {
-    // On desktop shareRoom copies; on mobile the native sheet gives its own
-    // feedback, but the tick is harmless either way.
-    if ((await shareRoom(slug)) !== 'fail') flash('share');
-  };
-
-  return (
-    <>
-      <button
-        className="btn btn-secondary btn-mini shrink-0"
-        onClick={copy}
-        title="Скопировать ссылку"
-        aria-label="Скопировать ссылку"
-      >
-        {done === 'copy' ? <Check size={15} /> : <Copy size={15} />}
-      </button>
-      <button
-        className="btn btn-secondary btn-mini shrink-0"
-        onClick={share}
-        title="Поделиться ссылкой"
-        aria-label="Поделиться ссылкой"
-      >
-        {done === 'share' ? <Check size={15} /> : <Share2 size={15} />}
-      </button>
-    </>
-  );
-}
 
 // A room the caller created: name is renamable, plus share.
 function CreatedRoomRow({
@@ -582,7 +541,7 @@ function CreatedRoomRow({
         >
           <Pencil size={15} />
         </button>
-        <RoomShareButtons slug={room.slug} />
+        <ShareButtons url={roomUrl(room.slug)} title="Созвон" />
       </div>
     </li>
   );
@@ -599,7 +558,7 @@ function JoinedRoomRow({ room, now }: RoomRowProps) {
         <RoomStatusTail room={room} now={now} />
       </span>
       <div className="flex items-center gap-2 shrink-0">
-        <RoomShareButtons slug={room.slug} />
+        <ShareButtons url={roomUrl(room.slug)} title="Созвон" />
       </div>
     </li>
   );
