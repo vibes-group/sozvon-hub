@@ -433,18 +433,24 @@ function RoomsCard() {
   );
 }
 
-// Status/expiry tail shown after a room's name, e.g. " · ожидает · истекает через 2 ч".
+// Status/expiry line shown under a room's name, e.g. "ожидает · истекает через
+// 2 ч", "идёт · 2 в звонке", or "никого · закроется через 4 мин". Kept on its
+// own line so it stays fully visible when the name is long or the card is narrow.
 function RoomStatusTail({ room, now }: { room: RoomSummary; now: number }) {
+  let text: string;
   if (room.status === 'active') {
     if (room.participants > 0) {
-      return <span className="text-muted-2"> · идёт · {room.participants} в звонке</span>;
+      text = `идёт · ${room.participants} в звонке`;
+    } else {
+      // Active but empty: the grace teardown is counting down.
+      const tail = closeTail(room.closesAt, now);
+      text = `никого${tail ? ` · ${tail}` : ''}`;
     }
-    // Active but empty: the grace teardown is counting down.
-    const tail = closeTail(room.closesAt, now);
-    return <span className="text-muted-2"> · никого{tail ? ` · ${tail}` : ''}</span>;
+  } else {
+    const tail = expiryTail(room.expiresAt, now);
+    text = `ожидает${tail ? ` · ${tail}` : ''}`;
   }
-  const tail = expiryTail(room.expiresAt, now);
-  return <span className="text-muted-2"> · ожидает{tail ? ` · ${tail}` : ''}</span>;
+  return <span className="text-muted-2">{text}</span>;
 }
 
 type RoomRowProps = {
@@ -558,8 +564,8 @@ function CreatedRoomRow({
 
   return (
     <li className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
-      <span className="min-w-0 truncate text-[13px] text-muted">
-        <a href={room.url} className="text-accent underline underline-offset-2">
+      <span className="flex min-w-0 flex-col text-[13px] text-muted">
+        <a href={room.url} className="truncate text-accent underline underline-offset-2">
           {room.name || room.slug}
         </a>
         <RoomStatusTail room={room} now={now} />
@@ -586,8 +592,8 @@ function CreatedRoomRow({
 function JoinedRoomRow({ room, now }: RoomRowProps) {
   return (
     <li className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
-      <span className="min-w-0 truncate text-[13px] text-muted">
-        <a href={room.url} className="text-accent underline underline-offset-2">
+      <span className="flex min-w-0 flex-col text-[13px] text-muted">
+        <a href={room.url} className="truncate text-accent underline underline-offset-2">
           {room.name || room.slug}
         </a>
         <RoomStatusTail room={room} now={now} />
