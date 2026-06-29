@@ -386,7 +386,12 @@ function RoomsCard() {
 
       {fresh && (
         <div className="grid gap-2 border border-accent/40 bg-bg-input p-3">
-          <span className="section-label min-w-0 break-words">Новая комната «{fresh.name}»</span>
+          <a
+            href={fresh.url}
+            className="section-label min-w-0 break-words text-accent underline underline-offset-2"
+          >
+            Открыть комнату «{fresh.name}»
+          </a>
           <div className="flex gap-2">
             <input
               className="input-field mt-0 min-w-0 flex-1"
