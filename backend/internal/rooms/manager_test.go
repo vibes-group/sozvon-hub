@@ -176,103 +176,165 @@ func TestSweep(t *testing.T) {
 	}
 }
 
-// stubRoom stands in for *sfu.Room so grace/teardown can be tested without a
-// real SFU. fakeTimer captures the grace callback so the test fires it on demand
-// instead of waiting wall-clock minutes.
+func TestSweepPrunesOldEndedRooms(t *testing.T) {
+	m, database, clock := newTestManager(t)
+	ctx := context.Background()
+
+	old, _ := m.Create(ctx, creator, "")
+	setStatus(t, database, old.Slug, "ended")
+	setEndedAt(t, database, old.Slug, clock.Add(-8*24*time.Hour).Format(timeFormat))
+
+	recent, _ := m.Create(ctx, creator, "")
+	setStatus(t, database, recent.Slug, "ended")
+	setEndedAt(t, database, recent.Slug, clock.Add(-time.Hour).Format(timeFormat))
+
+	m.sweep(ctx)
+
+	if roomExists(t, database, old.Slug) {
+		t.Fatal("ended room past retention not pruned")
+	}
+	if !roomExists(t, database, recent.Slug) {
+		t.Fatal("recently ended room wrongly pruned")
+	}
+}
+
+func TestReconcileActiveOnStartup(t *testing.T) {
+	m, database, clock := newTestManager(t)
+	ctx := context.Background()
+
+	pending, _ := m.Create(ctx, creator, "")
+	occupied, _ := m.Create(ctx, creator, "") // active, was occupied at the crash
+	setStatus(t, database, occupied.Slug, "active")
+
+	if err := m.ReconcileActiveOnStartup(ctx); err != nil {
+		t.Fatalf("ReconcileActiveOnStartup: %v", err)
+	}
+
+	// The active room's empty countdown is started; the pending room is untouched.
+	if emptySinceOf(t, database, occupied.Slug) == "" {
+		t.Fatal("empty countdown not started for active room")
+	}
+	if emptySinceOf(t, database, pending.Slug) != "" {
+		t.Fatal("pending room got an empty countdown")
+	}
+
+	// Nobody reconnects: once the grace period lapses, the sweeper ends it.
+	*clock = clock.Add(2 * m.cfg.GracePeriod)
+	m.sweep(ctx)
+	if got := statusOf(t, database, occupied.Slug); got != "ended" {
+		t.Fatalf("unreclaimed active room status = %q, want ended", got)
+	}
+	if got := statusOf(t, database, pending.Slug); got != "pending" {
+		t.Fatalf("pending room status = %q, want pending", got)
+	}
+}
+
+// stubRoom stands in for *sfu.Room so the teardown path can be tested without a
+// real SFU.
 type stubRoom struct{ closed int }
 
 func (s *stubRoom) ServeWS(http.ResponseWriter, *http.Request) {}
 func (s *stubRoom) Close()                                     { s.closed++ }
 
-type fakeTimer struct {
-	fn      func()
-	stopped bool
-}
-
-func (f *fakeTimer) Stop() bool {
-	was := !f.stopped
-	f.stopped = true
-	return was
-}
-
-// emptyLiveRoom seeds m.live with a stub room holding one peer for an existing
-// DB row, and captures every grace timer the manager schedules.
-func emptyLiveRoom(t *testing.T, m *Manager) (slug string, room *stubRoom, timers *[]*fakeTimer) {
+// seedLiveRoom creates an active DB row plus an in-memory live room holding the
+// given peers — what acquire + peerJoined produce, without a real SFU.
+func seedLiveRoom(t *testing.T, m *Manager, peers ...string) (string, *stubRoom) {
 	t.Helper()
 	info, err := m.Create(context.Background(), creator, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	setStatus(t, m.db, info.Slug, "active")
-	room = &stubRoom{}
-	captured := []*fakeTimer{}
-	timers = &captured
-	m.afterFunc = func(_ time.Duration, fn func()) stoppable {
-		ft := &fakeTimer{fn: fn}
-		captured = append(captured, ft)
-		*timers = captured
-		return ft
+	room := &stubRoom{}
+	p := map[string]struct{}{}
+	for _, id := range peers {
+		p[id] = struct{}{}
 	}
-	m.live[info.Slug] = &liveRoom{room: room, peers: map[string]struct{}{"p1": {}}}
-	return info.Slug, room, timers
+	m.mu.Lock()
+	m.live[info.Slug] = &liveRoom{room: room, peers: p}
+	m.mu.Unlock()
+	return info.Slug, room
 }
 
-func TestGracePeriodEndsEmptyRoom(t *testing.T) {
-	m, database, _ := newTestManager(t)
-	slug, room, timers := emptyLiveRoom(t, m)
+func isLive(m *Manager, slug string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.live[slug]
+	return ok
+}
+
+func TestEmptyRoomEndedAfterGrace(t *testing.T) {
+	m, database, clock := newTestManager(t)
+	ctx := context.Background()
+	slug, room := seedLiveRoom(t, m, "p1")
 
 	m.peerLeft(slug, "p1")
 
-	// Room is kept alive during grace: not closed, still active, still live.
+	// Room is kept alive during the grace window: empty_since stamped, still
+	// active, still live, not closed.
 	if room.closed != 0 {
 		t.Fatalf("room closed during grace window (closed=%d)", room.closed)
 	}
 	if got := statusOf(t, database, slug); got != "active" {
 		t.Fatalf("status during grace = %q, want active", got)
 	}
-	if _, ok := m.live[slug]; !ok {
+	if emptySinceOf(t, database, slug) == "" {
+		t.Fatal("empty_since not stamped when room emptied")
+	}
+	if !isLive(m, slug) {
 		t.Fatal("room dropped from live set during grace")
 	}
-	if len(*timers) != 1 {
-		t.Fatalf("expected 1 grace timer scheduled, got %d", len(*timers))
+
+	// A sweep before the grace lapses leaves it alone.
+	*clock = clock.Add(m.cfg.GracePeriod - time.Minute)
+	m.sweep(ctx)
+	if got := statusOf(t, database, slug); got != "active" {
+		t.Fatalf("room ended before grace lapsed: %q", got)
 	}
 
-	// Grace lapses with the room still empty → tear down and end the link.
-	(*timers)[0].fn()
-	if room.closed != 1 {
-		t.Fatalf("room not closed after grace (closed=%d)", room.closed)
-	}
+	// Once grace lapses with the room still empty → tear down and end the link.
+	*clock = clock.Add(2 * time.Minute)
+	m.sweep(ctx)
 	if got := statusOf(t, database, slug); got != "ended" {
 		t.Fatalf("status after grace = %q, want ended", got)
 	}
-	if _, ok := m.live[slug]; ok {
+	if room.closed != 1 {
+		t.Fatalf("room not closed after grace (closed=%d)", room.closed)
+	}
+	if isLive(m, slug) {
 		t.Fatal("ended room still in live set")
 	}
 }
 
-func TestReconnectCancelsGrace(t *testing.T) {
-	m, database, _ := newTestManager(t)
-	slug, room, timers := emptyLiveRoom(t, m)
+func TestReconnectClearsEmptyCountdown(t *testing.T) {
+	m, database, clock := newTestManager(t)
+	ctx := context.Background()
+	slug, room := seedLiveRoom(t, m, "p1")
 
 	m.peerLeft(slug, "p1")
-	grace := (*timers)[0]
-
-	// A reconnect arrives before grace lapses.
-	m.peerJoined(slug, "p2")
-	if !grace.stopped {
-		t.Fatal("grace timer not stopped on reconnect")
+	if emptySinceOf(t, database, slug) == "" {
+		t.Fatal("empty_since not stamped when room emptied")
 	}
 
-	// A late-firing stale timer must not tear down the now-occupied room.
-	grace.fn()
-	if room.closed != 0 {
-		t.Fatalf("room closed despite reconnect (closed=%d)", room.closed)
+	// A reconnect arrives before grace lapses: acquire clears the countdown.
+	if _, err := m.acquire(slug); err != nil {
+		t.Fatalf("acquire: %v", err)
 	}
+	if es := emptySinceOf(t, database, slug); es != "" {
+		t.Fatalf("empty_since not cleared on reconnect: %q", es)
+	}
+
+	// Even well past the grace period, the sweeper leaves the reclaimed room.
+	*clock = clock.Add(2 * m.cfg.GracePeriod)
+	m.sweep(ctx)
 	if got := statusOf(t, database, slug); got != "active" {
-		t.Fatalf("status after reconnect = %q, want active", got)
+		t.Fatalf("reclaimed room ended: %q", got)
 	}
-	if _, ok := m.live[slug]; !ok {
-		t.Fatal("room dropped from live set after reconnect")
+	if room.closed != 0 {
+		t.Fatalf("reclaimed room closed (closed=%d)", room.closed)
+	}
+	if !isLive(m, slug) {
+		t.Fatal("reclaimed room dropped from live set")
 	}
 }
 
@@ -300,4 +362,32 @@ func statusOf(t *testing.T, database *sql.DB, slug string) string {
 		t.Fatalf("status of %q: %v", slug, err)
 	}
 	return status
+}
+
+func emptySinceOf(t *testing.T, database *sql.DB, slug string) string {
+	t.Helper()
+	var es sql.NullString
+	if err := database.QueryRowContext(context.Background(),
+		`select empty_since from rooms where slug = ?`, slug).Scan(&es); err != nil {
+		t.Fatalf("empty_since of %q: %v", slug, err)
+	}
+	return es.String
+}
+
+func setEndedAt(t *testing.T, database *sql.DB, slug, ts string) {
+	t.Helper()
+	if _, err := database.ExecContext(context.Background(),
+		`update rooms set ended_at = ? where slug = ?`, ts, slug); err != nil {
+		t.Fatalf("set ended_at: %v", err)
+	}
+}
+
+func roomExists(t *testing.T, database *sql.DB, slug string) bool {
+	t.Helper()
+	var n int
+	if err := database.QueryRowContext(context.Background(),
+		`select count(*) from rooms where slug = ?`, slug).Scan(&n); err != nil {
+		t.Fatalf("exists %q: %v", slug, err)
+	}
+	return n > 0
 }

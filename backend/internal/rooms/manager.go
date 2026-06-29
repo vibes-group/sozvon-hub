@@ -2,8 +2,13 @@
 // SQLite rooms table plus, while in use, a live SFU room created lazily on first
 // join. When the last participant leaves, the room is kept alive for a short
 // grace period so a reload or brief drop reconnects to the same call; only if it
-// is still empty when the grace lapses is it torn down and the link ended. A
-// background sweeper ends unused links past their TTL.
+// is still empty when the grace lapses is it torn down and the link ended.
+//
+// Liveness is tracked durably via the rooms.empty_since column rather than an
+// in-memory timer: the last leaver stamps it, a (re)join clears it, and the
+// background sweeper ends rooms empty past the grace period — and pending links
+// past their TTL. Because the column survives a restart, rooms left 'active' by
+// a crash are reconciled and reaped instead of lingering forever.
 package rooms
 
 import (
@@ -49,15 +54,10 @@ type Config struct {
 }
 
 // liveSFU is the slice of *sfu.Room the manager drives. Narrowing it to an
-// interface lets the grace/teardown logic be tested without a real SFU.
+// interface lets the teardown logic be tested without a real SFU.
 type liveSFU interface {
 	ServeWS(w http.ResponseWriter, r *http.Request)
 	Close()
-}
-
-// stoppable is the slice of *time.Timer used to cancel a pending grace teardown.
-type stoppable interface {
-	Stop() bool
 }
 
 // Manager owns the room table and the set of currently-live SFU rooms.
@@ -65,24 +65,17 @@ type Manager struct {
 	db  *sql.DB
 	cfg Config
 
-	mu        sync.Mutex
-	live      map[string]*liveRoom
-	clock     func() time.Time
-	afterFunc func(time.Duration, func()) stoppable
+	mu    sync.Mutex
+	live  map[string]*liveRoom
+	clock func() time.Time
 }
 
-// liveRoom couples an in-memory SFU room with a participant counter so the
-// manager can detect when the room empties. When empty, graceTimer holds the
-// pending teardown; graceGen is bumped whenever grace is scheduled or cancelled
-// so a timer that already fired can detect it was superseded and bail.
+// liveRoom couples an in-memory SFU room with its set of connected peers so the
+// manager can detect when the room empties. The empty/teardown countdown itself
+// lives in the rooms.empty_since column, not here, so it survives a restart.
 type liveRoom struct {
-	room       liveSFU
-	peers      map[string]struct{}
-	graceTimer stoppable
-	graceGen   uint64
-	// graceDeadline is when the empty room will be torn down; zero when the room
-	// has participants (no teardown pending). Surfaced to the UI as closesAt.
-	graceDeadline time.Time
+	room  liveSFU
+	peers map[string]struct{}
 }
 
 func NewManager(database *sql.DB, cfg Config) *Manager {
@@ -93,11 +86,10 @@ func NewManager(database *sql.DB, cfg Config) *Manager {
 		cfg.GracePeriod = 5 * time.Minute
 	}
 	return &Manager{
-		db:        database,
-		cfg:       cfg,
-		live:      make(map[string]*liveRoom),
-		clock:     time.Now,
-		afterFunc: func(d time.Duration, f func()) stoppable { return time.AfterFunc(d, f) },
+		db:    database,
+		cfg:   cfg,
+		live:  make(map[string]*liveRoom),
+		clock: time.Now,
 	}
 }
 
@@ -153,9 +145,9 @@ func (m *Manager) Rename(ctx context.Context, createdBy, slug, name string) erro
 }
 
 // RoomSummary is the API view of a room in a user's list (created or joined).
-// Participants and ClosesAt reflect live in-memory state at request time: how
-// many are in the call now and, when it has emptied, when the grace teardown
-// will end it.
+// Participants is the live in-memory count of who is in the call right now;
+// ClosesAt, derived from empty_since, is when an emptied room's grace lapses and
+// it is torn down (absent while the room is occupied).
 type RoomSummary struct {
 	Slug         string `json:"slug"`
 	URL          string `json:"url"`
@@ -167,20 +159,30 @@ type RoomSummary struct {
 	ClosesAt     string `json:"closesAt,omitempty"`
 }
 
-// liveInfo reports the current participant count for a slug and, when the room
-// has emptied and a grace teardown is pending, when it will close. A slug with
-// no live room (pending, or not yet rebuilt) reports zero and no close time.
-func (m *Manager) liveInfo(slug string) (participants int, closesAt string) {
+// liveParticipants reports how many peers are connected to a slug's live room
+// right now. A slug with no live room (pending, ended, or not yet rebuilt after
+// a restart) reports zero.
+func (m *Manager) liveParticipants(slug string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	lr, ok := m.live[slug]
-	if !ok {
-		return 0, ""
+	if lr, ok := m.live[slug]; ok {
+		return len(lr.peers)
 	}
-	if !lr.graceDeadline.IsZero() {
-		closesAt = lr.graceDeadline.UTC().Format(timeFormat)
+	return 0
+}
+
+// closesAt turns a room's empty_since into the time its grace period lapses
+// (empty_since + grace). It returns "" when the room is occupied (empty_since
+// null) or the stored value is unparseable.
+func (m *Manager) closesAt(emptySince sql.NullString) string {
+	if !emptySince.Valid || emptySince.String == "" {
+		return ""
 	}
-	return len(lr.peers), closesAt
+	t, err := time.Parse(timeFormat, emptySince.String)
+	if err != nil {
+		return ""
+	}
+	return t.Add(m.cfg.GracePeriod).UTC().Format(timeFormat)
 }
 
 // ListByCreator returns the caller's still-usable rooms (pending or active),
@@ -188,7 +190,7 @@ func (m *Manager) liveInfo(slug string) (participants int, closesAt string) {
 func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSummary, error) {
 	now := m.clock().UTC().Format(timeFormat)
 	rows, err := m.db.QueryContext(ctx, `
-		select slug, name, status, created_at, expires_at
+		select slug, name, status, created_at, expires_at, empty_since
 		from rooms
 		where created_by = ? and status != 'ended'
 		  and (status = 'active' or expires_at > ?)
@@ -203,11 +205,13 @@ func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSu
 	result := []RoomSummary{}
 	for rows.Next() {
 		var r RoomSummary
-		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+		var emptySince sql.NullString
+		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt, &emptySince); err != nil {
 			return nil, fmt.Errorf("scan room: %w", err)
 		}
 		r.URL = "/r/" + r.Slug
-		r.Participants, r.ClosesAt = m.liveInfo(r.Slug)
+		r.Participants = m.liveParticipants(r.Slug)
+		r.ClosesAt = m.closesAt(emptySince)
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -218,7 +222,7 @@ func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSu
 func (m *Manager) ListJoined(ctx context.Context, userID string) ([]RoomSummary, error) {
 	now := m.clock().UTC().Format(timeFormat)
 	rows, err := m.db.QueryContext(ctx, `
-		select r.slug, r.name, r.status, r.created_at, r.expires_at
+		select r.slug, r.name, r.status, r.created_at, r.expires_at, r.empty_since
 		from room_participants p
 		join rooms r on r.slug = p.slug
 		where p.user_id = ? and r.created_by != ? and r.status != 'ended'
@@ -234,11 +238,13 @@ func (m *Manager) ListJoined(ctx context.Context, userID string) ([]RoomSummary,
 	result := []RoomSummary{}
 	for rows.Next() {
 		var r RoomSummary
-		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+		var emptySince sql.NullString
+		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt, &emptySince); err != nil {
 			return nil, fmt.Errorf("scan joined room: %w", err)
 		}
 		r.URL = "/r/" + r.Slug
-		r.Participants, r.ClosesAt = m.liveInfo(r.Slug)
+		r.Participants = m.liveParticipants(r.Slug)
+		r.ClosesAt = m.closesAt(emptySince)
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -342,13 +348,13 @@ func (m *Manager) ServeWS(w http.ResponseWriter, r *http.Request, slug, userID s
 }
 
 // acquire returns the live room for slug, building it on first use and marking
-// the DB row active. Idempotent under concurrent first joins.
+// the DB row active. It also clears empty_since so a (re)join cancels any pending
+// empty teardown. Idempotent under concurrent first joins.
 func (m *Manager) acquire(slug string) (*liveRoom, error) {
 	m.mu.Lock()
 	if lr, ok := m.live[slug]; ok {
-		// Reconnect during the grace window: keep the room and abort teardown.
-		cancelGrace(lr)
 		m.mu.Unlock()
+		m.markOccupied(slug) // reconnect during the grace window: abort teardown
 		return lr, nil
 	}
 	m.mu.Unlock()
@@ -373,76 +379,68 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 	if lr, ok := m.live[slug]; ok {
 		m.mu.Unlock()
 		room.Close()
+		m.markOccupied(slug)
 		return lr, nil
 	}
 	lr := &liveRoom{room: room, peers: make(map[string]struct{})}
 	m.live[slug] = lr
 	m.mu.Unlock()
 
-	m.markActive(slug)
+	m.markActive(slug)   // pending → active on first join
+	m.markOccupied(slug) // also covers rebuilding a room left 'active' by a restart
 	return lr, nil
 }
 
 func (m *Manager) peerJoined(slug, id string) {
 	m.mu.Lock()
 	if lr, ok := m.live[slug]; ok {
-		cancelGrace(lr)
 		lr.peers[id] = struct{}{}
 	}
 	m.mu.Unlock()
 }
 
-// peerLeft removes a peer and, when the room empties, schedules teardown after
-// the grace period rather than ending it immediately. A reconnect within the
-// window (see acquire/peerJoined) cancels the teardown, so reloading the page
-// rejoins the same call instead of killing the room.
+// peerLeft removes a peer and, when the room empties, stamps empty_since so the
+// sweeper ends it once the grace period lapses — rather than ending it now. A
+// reconnect within the window clears the stamp (acquire), so reloading the page
+// rejoins the same call instead of killing the room. The live room is kept in
+// memory through the window so the reconnect reuses it.
 func (m *Manager) peerLeft(slug, id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	lr, ok := m.live[slug]
 	if !ok {
-		return
-	}
-	delete(lr.peers, id)
-	if len(lr.peers) > 0 {
-		return
-	}
-	lr.graceGen++
-	gen := lr.graceGen
-	lr.graceDeadline = m.clock().Add(m.cfg.GracePeriod)
-	lr.graceTimer = m.afterFunc(m.cfg.GracePeriod, func() { m.graceExpired(slug, lr, gen) })
-}
-
-// graceExpired ends a room whose grace period lapsed while still empty. It bails
-// if the room was reclaimed (graceGen advanced) or refilled in the meantime, so
-// a timer that fired just as someone reconnected can't tear down a live call.
-func (m *Manager) graceExpired(slug string, lr *liveRoom, gen uint64) {
-	m.mu.Lock()
-	if cur, ok := m.live[slug]; !ok || cur != lr || lr.graceGen != gen || len(lr.peers) > 0 {
 		m.mu.Unlock()
 		return
 	}
-	delete(m.live, slug)
+	delete(lr.peers, id)
+	empty := len(lr.peers) == 0
 	m.mu.Unlock()
-
-	lr.room.Close()
-	m.markEnded(slug)
-	if m.cfg.FileStore != nil {
-		m.cfg.FileStore.DeleteRoom(slug)
+	if empty {
+		m.markEmpty(slug)
 	}
-	log.Printf("rooms: %q empty past grace, ended", slug)
 }
 
-// cancelGrace aborts a pending teardown and invalidates any already-fired timer.
-// Must be called with m.mu held.
-func cancelGrace(lr *liveRoom) {
-	if lr.graceTimer == nil {
-		return
+// markOccupied clears the empty countdown: the room has, or is about to have, a
+// connected peer, so the sweeper must not end it. No-op once ended.
+func (m *Manager) markOccupied(slug string) {
+	if _, err := m.db.ExecContext(context.Background(), `
+		update rooms set empty_since = null
+		where slug = ? and status = 'active'
+	`, slug); err != nil {
+		log.Printf("rooms: mark occupied %q: %v", slug, err)
 	}
-	lr.graceTimer.Stop()
-	lr.graceTimer = nil
-	lr.graceGen++
-	lr.graceDeadline = time.Time{}
+}
+
+// markEmpty starts the empty countdown: the last peer left, so the sweeper ends
+// the room once empty_since is older than the grace period unless a peer rejoins
+// first (clearing it via markOccupied). No-op once ended.
+func (m *Manager) markEmpty(slug string) {
+	now := m.clock().UTC().Format(timeFormat)
+	if _, err := m.db.ExecContext(context.Background(), `
+		update rooms set empty_since = ?
+		where slug = ? and status = 'active'
+	`, now, slug); err != nil {
+		log.Printf("rooms: mark empty %q: %v", slug, err)
+	}
 }
 
 func (m *Manager) markActive(slug string) {
@@ -469,8 +467,31 @@ func (m *Manager) markEnded(slug string) {
 	}
 }
 
-// Run starts the background sweeper until ctx is cancelled. The sweeper ends
-// unused links past their TTL.
+// ReconcileActiveOnStartup restarts the empty countdown for rooms left 'active'
+// by a previous process. Their live peers were lost on restart, so none is
+// occupied now; stamping empty_since starts each one's grace window. A client
+// that was mid-call reconnects within the window and clears the stamp (acquire),
+// while the sweeper ends any still empty when the grace period lapses. Without
+// this, a room occupied at the moment of the crash keeps empty_since null and
+// would never be swept — lingering in users' lists and joinable forever. Rooms
+// already counting down (empty_since set) keep their original deadline.
+// Run once at startup, before serving joins.
+func (m *Manager) ReconcileActiveOnStartup(ctx context.Context) error {
+	now := m.clock().UTC().Format(timeFormat)
+	res, err := m.db.ExecContext(ctx, `
+		update rooms set empty_since = ?
+		where status = 'active' and empty_since is null
+	`, now)
+	if err != nil {
+		return fmt.Errorf("reconcile active rooms: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("rooms: started empty countdown for %d active room(s) from a previous run", n)
+	}
+	return nil
+}
+
+// Run starts the background sweeper until ctx is cancelled.
 func (m *Manager) Run(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -484,25 +505,107 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// sweep ends every pending room whose TTL has lapsed. Active rooms are not swept
-// by TTL — they end when they empty (handled by peerLeft).
+// endedRetention is how long an ended room's row is kept before the sweeper
+// deletes it. Ended links are dead — never joinable, never listed — so the row
+// only serves short-term history/debugging; past this window it's pruned to
+// bound table growth. room_participants rows go with it via ON DELETE CASCADE.
+const endedRetention = 7 * 24 * time.Hour
+
+// sweep ends pending rooms past their TTL, ends active rooms empty past the grace
+// period, and prunes ended rooms past the retention window.
 func (m *Manager) sweep(ctx context.Context) {
-	now := m.clock().UTC().Format(timeFormat)
+	now := m.clock().UTC()
+	nowStr := now.Format(timeFormat)
 	if _, err := m.db.ExecContext(ctx, `
 		update rooms
 		set status = 'ended', ended_at = ?, updated_at = ?
 		where status = 'pending' and expires_at <= ?
-	`, now, now, now); err != nil {
+	`, nowStr, nowStr, nowStr); err != nil {
 		log.Printf("rooms: sweep: %v", err)
+	}
+
+	graceCutoff := now.Add(-m.cfg.GracePeriod).Format(timeFormat)
+	m.endRoomsEmptyPast(ctx, graceCutoff, nowStr)
+
+	retentionCutoff := now.Add(-endedRetention).Format(timeFormat)
+	if _, err := m.db.ExecContext(ctx, `
+		delete from rooms
+		where status = 'ended' and ended_at is not null and ended_at <= ?
+	`, retentionCutoff); err != nil {
+		log.Printf("rooms: prune ended: %v", err)
 	}
 }
 
-// Close tears down every live SFU room. Called on shutdown.
+// endRoomsEmptyPast ends active rooms that have sat empty longer than the grace
+// period, tearing down any live SFU room and deleting the room's files. Each end
+// is a guarded UPDATE: if a reconnect cleared empty_since after the room was
+// selected, the row no longer matches and the room is left alone.
+func (m *Manager) endRoomsEmptyPast(ctx context.Context, cutoff, now string) {
+	rows, err := m.db.QueryContext(ctx, `
+		select slug from rooms
+		where status = 'active' and empty_since is not null and empty_since <= ?
+	`, cutoff)
+	if err != nil {
+		log.Printf("rooms: sweep empty: %v", err)
+		return
+	}
+	var slugs []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			rows.Close()
+			log.Printf("rooms: sweep empty scan: %v", err)
+			return
+		}
+		slugs = append(slugs, slug)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("rooms: sweep empty rows: %v", err)
+		return
+	}
+
+	for _, slug := range slugs {
+		res, err := m.db.ExecContext(ctx, `
+			update rooms set status = 'ended', ended_at = ?, updated_at = ?
+			where slug = ? and status = 'active' and empty_since is not null and empty_since <= ?
+		`, now, now, slug, cutoff)
+		if err != nil {
+			log.Printf("rooms: end empty %q: %v", slug, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue // reconnected since selection — empty_since cleared
+		}
+		m.teardownLive(slug)
+		if m.cfg.FileStore != nil {
+			m.cfg.FileStore.DeleteRoom(slug)
+		}
+		log.Printf("rooms: %q empty past grace, ended", slug)
+	}
+}
+
+// teardownLive removes a slug's live SFU room, if this process holds one, and
+// closes it. Safe to call for a slug with no live room.
+func (m *Manager) teardownLive(slug string) {
+	m.mu.Lock()
+	lr, ok := m.live[slug]
+	if ok {
+		delete(m.live, slug)
+	}
+	m.mu.Unlock()
+	if ok {
+		lr.room.Close()
+	}
+}
+
+// Close tears down every live SFU room. Called on shutdown. Active rooms keep
+// their status; the next startup's ReconcileActiveOnStartup restarts their empty
+// countdown.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	rooms := make([]*liveRoom, 0, len(m.live))
 	for _, lr := range m.live {
-		cancelGrace(lr)
 		rooms = append(rooms, lr)
 	}
 	m.live = make(map[string]*liveRoom)

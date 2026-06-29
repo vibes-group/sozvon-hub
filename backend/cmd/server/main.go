@@ -110,6 +110,9 @@ func main() {
 		GracePeriod: cfg.RoomGrace,
 		FileStore:   fileStore,
 	})
+	if err := roomManager.ReconcileActiveOnStartup(ctx); err != nil {
+		log.Fatalf("rooms reconcile: %v", err)
+	}
 	sweepCtx, sweepCancel := context.WithCancel(ctx)
 	defer sweepCancel()
 	go roomManager.Run(sweepCtx)
