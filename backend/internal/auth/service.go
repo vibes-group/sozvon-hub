@@ -419,6 +419,26 @@ func (s *Service) AdminUpdateUser(ctx context.Context, userID string, canInvite 
 	return nil
 }
 
+// AdminDeleteUser permanently removes a user account. The is_admin = 0 filter
+// means the administrator account can never be deleted — which also blocks an
+// admin deleting themselves, since they are the only admin. Owned rows —
+// sessions, rooms, room participations — cascade away; invites the user minted
+// have their inviter cleared. A missing or protected target yields ErrForbidden.
+func (s *Service) AdminDeleteUser(ctx context.Context, userID string) error {
+	res, err := s.db.ExecContext(ctx, `delete from users where id = ? and is_admin = 0`, userID)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete user rows: %w", err)
+	}
+	if n == 0 {
+		return ErrForbidden
+	}
+	return nil
+}
+
 // failLogin records a failed attempt against the username's lockout. It returns
 // LockedError once the failure trips the threshold (so the caller learns to back
 // off), otherwise the generic ErrInvalidCredentials.

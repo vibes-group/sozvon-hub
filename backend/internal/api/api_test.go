@@ -378,6 +378,28 @@ func TestAdmin(t *testing.T) {
 	resp = doJSON(t, bobClient, http.MethodPost, srv.URL+"/api/invites", map[string]any{})
 	mustStatus(t, resp, http.StatusCreated)
 	resp.Body.Close()
+
+	// Non-admin DELETE → 403.
+	resp = doJSON(t, bobClient, http.MethodDelete, srv.URL+"/api/admin/users/"+admin.ID, nil)
+	mustStatus(t, resp, http.StatusForbidden)
+	resp.Body.Close()
+
+	// Admin cannot delete themselves → 403.
+	resp = doJSON(t, adminClient, http.MethodDelete, srv.URL+"/api/admin/users/"+admin.ID, nil)
+	mustStatus(t, resp, http.StatusForbidden)
+	resp.Body.Close()
+
+	// Admin deletes bob → 204, and the listing drops to one user.
+	resp = doJSON(t, adminClient, http.MethodDelete, srv.URL+"/api/admin/users/"+bob.ID, nil)
+	mustStatus(t, resp, http.StatusNoContent)
+	resp.Body.Close()
+
+	resp = doJSON(t, adminClient, http.MethodGet, srv.URL+"/api/admin/users", nil)
+	mustStatus(t, resp, http.StatusOK)
+	decode(t, resp, &users)
+	if len(users.Users) != 1 {
+		t.Fatalf("expected 1 user after delete, got %d", len(users.Users))
+	}
 }
 
 func TestLoginRateLimitedByIP(t *testing.T) {

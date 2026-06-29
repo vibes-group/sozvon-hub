@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  adminDeleteUser,
   adminListUsers,
   adminUpdateUser,
   changePassword,
@@ -31,6 +32,10 @@ export function AdminUsersCard() {
     setUsers((prev) => prev.map((x) => (x.id === id ? { ...x, ...p } : x)));
   }, []);
 
+  const remove = useCallback((id: string) => {
+    setUsers((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
   return (
     <section className="card grid gap-3">
       <h2 className="card-title">Пользователи</h2>
@@ -40,7 +45,7 @@ export function AdminUsersCard() {
       {users.length > 0 && (
         <ul className="grid gap-2">
           {users.map((u) => (
-            <AdminUserRow key={u.id} user={u} onPatch={patch} onError={setError} />
+            <AdminUserRow key={u.id} user={u} onPatch={patch} onRemove={remove} onError={setError} />
           ))}
         </ul>
       )}
@@ -51,14 +56,17 @@ export function AdminUsersCard() {
 function AdminUserRow({
   user: u,
   onPatch,
+  onRemove,
   onError,
 }: {
   user: AdminUserView;
   onPatch: (id: string, p: Partial<AdminUserView>) => void;
+  onRemove: (id: string) => void;
   onError: (msg: string | null) => void;
 }) {
   const [note, setNote] = useState(u.adminNote);
-  const [busy, setBusy] = useState<null | 'note' | 'invite'>(null);
+  const [busy, setBusy] = useState<null | 'note' | 'invite' | 'delete'>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const saveNote = useCallback(async () => {
     if (busy || note.trim() === u.adminNote) return;
@@ -87,6 +95,27 @@ function AdminUserRow({
       setBusy(null);
     }
   }, [busy, u.canInvite, u.id, onPatch, onError]);
+
+  // First click arms a 3 s confirmation; the second click within that window
+  // actually deletes. Avoids a modal while still guarding a destructive action.
+  const handleDelete = useCallback(async () => {
+    if (busy) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 3000);
+      return;
+    }
+    setConfirmDelete(false);
+    setBusy('delete');
+    onError(null);
+    try {
+      await adminDeleteUser(u.id);
+      onRemove(u.id);
+    } catch (e) {
+      onError(errText(e));
+      setBusy(null);
+    }
+  }, [busy, confirmDelete, u.id, onRemove, onError]);
 
   return (
     <li className="grid min-w-0 gap-2 border border-line bg-bg-input px-3 py-2.5">
@@ -126,6 +155,15 @@ function AdminUserRow({
         >
           {busy === 'note' ? '…' : 'Сохранить'}
         </button>
+        {!u.isAdmin && (
+          <button
+            className="btn btn-danger btn-mini shrink-0"
+            disabled={busy === 'delete'}
+            onClick={handleDelete}
+          >
+            {busy === 'delete' ? '…' : confirmDelete ? 'Точно?' : 'Удалить'}
+          </button>
+        )}
       </div>
     </li>
   );

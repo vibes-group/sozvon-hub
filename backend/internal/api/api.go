@@ -90,6 +90,7 @@ func Routes(d Deps, webHandler http.Handler) http.Handler {
 
 	mux.HandleFunc("GET /api/admin/users", d.adminUsersList)
 	mux.HandleFunc("PATCH /api/admin/users/{id}", d.adminUserUpdate)
+	mux.HandleFunc("DELETE /api/admin/users/{id}", d.adminUserDelete)
 
 	mux.HandleFunc("GET /ws/{slug}", d.serveWS)
 
@@ -456,6 +457,17 @@ func (d Deps) adminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Auth.AdminUpdateUser(r.Context(), r.PathValue("id"), body.CanInvite, body.AdminNote); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d Deps) adminUserDelete(w http.ResponseWriter, r *http.Request) {
+	if _, ok := d.requireAdmin(w, r); !ok {
+		return
+	}
+	if err := d.Auth.AdminDeleteUser(r.Context(), r.PathValue("id")); err != nil {
 		writeAuthError(w, err)
 		return
 	}

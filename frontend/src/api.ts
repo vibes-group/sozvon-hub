@@ -267,3 +267,8 @@ export async function adminUpdateUser(
 ): Promise<void> {
   await request<void>('PATCH', `/api/admin/users/${encodeURIComponent(id)}`, patch);
 }
+
+// Permanently delete a user. The server rejects deleting the admin account.
+export async function adminDeleteUser(id: string): Promise<void> {
+  await request<void>('DELETE', `/api/admin/users/${encodeURIComponent(id)}`);
+}

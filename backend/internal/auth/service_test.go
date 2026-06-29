@@ -567,6 +567,41 @@ func TestAdminUpdateUser(t *testing.T) {
 	}
 }
 
+func TestAdminDeleteUser(t *testing.T) {
+	svc, database := newTestService(t)
+	ctx := context.Background()
+
+	_, admin := bootstrapUser(t, svc, "admin", "password123")
+	makeAdmin(t, database, admin.ID)
+	invite, _ := svc.CreateInvite(ctx, admin.ID, false, "")
+	_, bob, _ := svc.RegisterWithInvite(ctx, invite.Token, "bob", "password123")
+
+	// Cannot delete the admin account (also covers self-deletion), nor an empty id.
+	if err := svc.AdminDeleteUser(ctx, admin.ID); err != ErrForbidden {
+		t.Fatalf("delete admin: want ErrForbidden, got %v", err)
+	}
+	if err := svc.AdminDeleteUser(ctx, ""); err != ErrForbidden {
+		t.Fatalf("delete empty id: want ErrForbidden, got %v", err)
+	}
+	if len(mustListUsers(t, svc)) != 2 {
+		t.Fatal("no user should have been deleted yet")
+	}
+
+	// Delete bob → gone from the listing.
+	if err := svc.AdminDeleteUser(ctx, bob.ID); err != nil {
+		t.Fatalf("delete bob: %v", err)
+	}
+	users := mustListUsers(t, svc)
+	if len(users) != 1 || users[0].ID != admin.ID {
+		t.Fatalf("expected only admin left, got %+v", users)
+	}
+
+	// Deleting an unknown / already-removed id is forbidden (no-op).
+	if err := svc.AdminDeleteUser(ctx, bob.ID); err != ErrForbidden {
+		t.Fatalf("delete missing: want ErrForbidden, got %v", err)
+	}
+}
+
 func TestSingleAdminConstraint(t *testing.T) {
 	svc, database := newTestService(t)
 	ctx := context.Background()
