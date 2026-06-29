@@ -8,6 +8,7 @@ import {
   markRoomJoined,
   wasRoomJoined,
   clearRoomJoined,
+  addRecentRoom,
 } from '../utils/storage';
 import { CallScreen } from '../components/CallScreen';
 
@@ -21,6 +22,7 @@ export default function RoomPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const [roomName, setRoomName] = useState('');
   const [name, setName] = useState<string>(() => loadDisplayName());
   // Generated once so it stays put across keystrokes; shown as the placeholder
   // and used verbatim if the field is left blank — what you see is what you get.
@@ -38,7 +40,10 @@ export default function RoomPage() {
       .then((room) => {
         if (cancelled) return;
         if (!room || !room.joinable) setState({ kind: 'unavailable' });
-        else setState({ kind: 'ready' });
+        else {
+          setRoomName(room.name);
+          setState({ kind: 'ready' });
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -75,18 +80,36 @@ export default function RoomPage() {
     }
   }, [state, slug, joined]);
 
+  const joinWith = useCallback(
+    (finalName: string) => {
+      // Always cache locally (covers guests); persist to the account when changed.
+      saveDisplayName(finalName);
+      if (account && finalName !== account.name) {
+        void updateAccount({ name: finalName }).catch(() => {});
+      }
+      setName(finalName);
+      if (slug) {
+        markRoomJoined(slug);
+        addRecentRoom(slug, roomName || slug, Date.now());
+      }
+      setJoined(true);
+    },
+    [account, slug, roomName],
+  );
+
+  // Name is optional: a blank entry uses the placeholder guest name.
   const handleJoin = useCallback(() => {
-    // Name is optional: a blank entry uses the placeholder guest name.
-    const finalName = name.trim() || guestName;
-    // Always cache locally (covers guests); persist to the account when changed.
-    saveDisplayName(finalName);
-    if (account && finalName !== account.name) {
-      void updateAccount({ name: finalName }).catch(() => {});
-    }
-    if (finalName !== name) setName(finalName);
-    if (slug) markRoomJoined(slug);
-    setJoined(true);
-  }, [name, guestName, account, slug]);
+    joinWith(name.trim() || guestName);
+  }, [joinWith, name, guestName]);
+
+  // Skip the name prompt once a display name is already established — from the
+  // account or a previous visit on this device. Gated on `account` (not the
+  // editable `name` field) so typing in the prompt never auto-submits.
+  useEffect(() => {
+    if (state.kind !== 'ready' || !slug || joined) return;
+    const established = (account?.name || loadDisplayName()).trim();
+    if (established) joinWith(established);
+  }, [state, slug, joined, account, joinWith]);
 
   const handleLeave = useCallback(() => {
     if (slug) clearRoomJoined(slug);
@@ -130,7 +153,7 @@ export default function RoomPage() {
           <div className="card grid gap-4">
             <div>
               <h1 className="card-title">Вход в звонок</h1>
-              <p className="mt-1 text-[12px] text-muted-2">Комната {slug}</p>
+              <p className="mt-1 text-[12px] text-muted-2">Комната «{roomName || slug}»</p>
             </div>
             <label className="grid gap-1">
               <span className="section-label">Ваше имя</span>

@@ -21,17 +21,20 @@ export type Invite = {
 export type RoomCreated = {
   slug: string;
   url: string;
+  name: string;
   expiresAt?: string;
 };
 
 export type RoomStatus = {
   slug: string;
+  name: string;
   joinable: boolean;
 };
 
 export type RoomSummary = {
   slug: string;
   url: string;
+  name: string;
   status: string;
   createdAt?: string;
   expiresAt?: string;
@@ -157,11 +160,22 @@ export async function revokeInvite(id: string): Promise<void> {
 
 // ---- Rooms ----
 
-export async function createRoom(): Promise<RoomCreated> {
-  const body = await request<{ room: RoomCreated }>('POST', '/api/rooms');
+export async function createRoom(name?: string): Promise<RoomCreated> {
+  const trimmed = name?.trim() ?? '';
+  const body = await request<{ room: RoomCreated }>(
+    'POST',
+    '/api/rooms',
+    trimmed ? { name: trimmed } : {},
+  );
   const room = body.room;
   if (!room.url && room.slug) room.url = `/r/${room.slug}`;
   return room;
+}
+
+// Rename a room. Only the creator may rename it (the server enforces this and
+// returns 404 otherwise).
+export async function renameRoom(slug: string, name: string): Promise<void> {
+  await request<void>('PATCH', `/api/rooms/${encodeURIComponent(slug)}`, { name: name.trim() });
 }
 
 export async function fetchRoom(slug: string): Promise<RoomStatus | null> {
@@ -176,6 +190,12 @@ export async function fetchRoom(slug: string): Promise<RoomStatus | null> {
 
 export async function listMyRooms(): Promise<RoomSummary[]> {
   const body = await request<{ rooms: RoomSummary[] }>('GET', '/api/rooms');
+  return body.rooms ?? [];
+}
+
+// Rooms the caller has joined but did not create (logged-in users only).
+export async function listJoinedRooms(): Promise<RoomSummary[]> {
+  const body = await request<{ rooms: RoomSummary[] }>('GET', '/api/rooms/joined');
   return body.rooms ?? [];
 }
 

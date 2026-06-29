@@ -14,6 +14,7 @@ vi.mock('../api', async () => {
     register: vi.fn(),
     logout: vi.fn(),
     listMyRooms: vi.fn(),
+    listJoinedRooms: vi.fn(),
     listInvites: vi.fn(),
     adminListUsers: vi.fn(),
   };
@@ -24,6 +25,7 @@ import {
   login,
   register,
   listMyRooms,
+  listJoinedRooms,
   listInvites,
   adminListUsers,
   type User,
@@ -52,6 +54,7 @@ function renderAt(path: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listMyRooms).mockResolvedValue([]);
+  vi.mocked(listJoinedRooms).mockResolvedValue([]);
   vi.mocked(listInvites).mockResolvedValue([]);
   vi.mocked(adminListUsers).mockResolvedValue([]);
 });
@@ -75,7 +78,7 @@ describe('HomePage when logged out', () => {
     await user.click(screen.getByRole('button', { name: 'Войти' }));
 
     expect(loginMock).toHaveBeenCalledWith('alice', 'secret');
-    expect(await screen.findByText(/Вы вошли как/)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Комнаты' })).toBeInTheDocument();
   });
 
   it('shows the mapped Russian error when login fails with a known code', async () => {

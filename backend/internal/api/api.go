@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"sozvon-hub/backend/internal/auth"
 	"sozvon-hub/backend/internal/filestore"
@@ -56,6 +57,8 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 
 	mux.HandleFunc("POST /api/rooms", d.roomCreate)
 	mux.HandleFunc("GET /api/rooms", d.roomsList)
+	mux.HandleFunc("GET /api/rooms/joined", d.roomsJoined)
+	mux.HandleFunc("PATCH /api/rooms/{slug}", d.roomUpdate)
 	mux.HandleFunc("GET /api/rooms/{slug}", d.roomGet)
 	mux.HandleFunc("GET /api/config", d.config)
 
@@ -239,13 +242,65 @@ func (d Deps) roomCreate(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, err)
 		return
 	}
-	room, err := d.Rooms.Create(r.Context(), user.ID)
+	// Name is optional — an empty/absent body just means "generate one".
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readOptionalJSON(w, r, &body) {
+		return
+	}
+	room, err := d.Rooms.Create(r.Context(), user.ID, clampName(body.Name))
 	if err != nil {
 		log.Printf("rooms create: %v", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"room": room})
+}
+
+func (d Deps) roomUpdate(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	name := clampName(body.Name)
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_name"})
+		return
+	}
+	err = d.Rooms.Rename(r.Context(), user.ID, r.PathValue("slug"), name)
+	if errors.Is(err, rooms.ErrRoomNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "room_not_found"})
+		return
+	}
+	if err != nil {
+		log.Printf("rooms rename: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d Deps) roomsJoined(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	list, err := d.Rooms.ListJoined(r.Context(), user.ID)
+	if err != nil {
+		log.Printf("rooms joined: %v", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rooms": list})
 }
 
 func (d Deps) roomsList(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +320,7 @@ func (d Deps) roomsList(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) roomGet(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	joinable, err := d.Rooms.Joinable(r.Context(), slug)
+	room, err := d.Rooms.Get(r.Context(), slug)
 	if errors.Is(err, rooms.ErrRoomNotFound) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "room_not_found"})
 		return
@@ -275,13 +330,13 @@ func (d Deps) roomGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
-	if !joinable {
+	if !room.Joinable {
 		// Expired or ended links 404 too: an unjoinable link is indistinguishable
 		// from a missing one to a would-be guest.
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "room_not_found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"room": map[string]any{"slug": slug, "joinable": true}})
+	writeJSON(w, http.StatusOK, map[string]any{"room": room})
 }
 
 // --- Admin ---
@@ -371,8 +426,11 @@ func (d Deps) config(w http.ResponseWriter, r *http.Request) {
 
 // serveWS hands the connection to the room manager, which rejects non-joinable
 // rooms. No account is required — the unguessable slug is the access control.
+// The session cookie is read best-effort: a logged-in joiner is recorded so the
+// room appears in their "joined" list; a guest (no/invalid cookie) is not.
 func (d Deps) serveWS(w http.ResponseWriter, r *http.Request) {
-	d.Rooms.ServeWS(w, r, r.PathValue("slug"))
+	user, _ := d.Auth.CurrentUser(r.Context(), d.Auth.CookieToken(r))
+	d.Rooms.ServeWS(w, r, r.PathValue("slug"), user.ID)
 }
 
 // --- Helpers ---
@@ -398,6 +456,30 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// readOptionalJSON is readJSON for endpoints where the body may be absent: an
+// empty body leaves dst at its zero value and still succeeds.
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	defer r.Body.Close()
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request"})
+		return false
+	}
+	return true
+}
+
+// clampName trims a user-supplied room name and caps it at 64 runes, matching
+// the frontend's input limit.
+func clampName(name string) string {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > 64 {
+		runes := []rune(name)
+		name = strings.TrimSpace(string(runes[:64]))
+	}
+	return name
 }
 
 func writeAuthError(w http.ResponseWriter, err error) {

@@ -30,6 +30,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchMe).mockResolvedValue(null);
   sessionStorage.clear();
+  localStorage.clear();
 });
 
 describe('RoomPage', () => {
@@ -40,13 +41,13 @@ describe('RoomPage', () => {
   });
 
   it('shows the unavailable card when the room is not joinable', async () => {
-    fetchRoomMock.mockResolvedValue({ slug: 'full', joinable: false });
+    fetchRoomMock.mockResolvedValue({ slug: 'full', name: '', joinable: false });
     renderRoom('full');
     expect(await screen.findByText('Комната недоступна')).toBeInTheDocument();
   });
 
   it('shows the name prompt when the room is joinable', async () => {
-    fetchRoomMock.mockResolvedValue({ slug: 'ok', joinable: true });
+    fetchRoomMock.mockResolvedValue({ slug: 'ok', name: 'Тест', joinable: true });
     renderRoom('ok');
     expect(await screen.findByRole('heading', { name: 'Вход в звонок' })).toBeInTheDocument();
     expect(screen.getByLabelText('Ваше имя')).toBeInTheDocument();
@@ -54,7 +55,7 @@ describe('RoomPage', () => {
   });
 
   it('re-joins automatically on reload when the tab already joined this room', async () => {
-    fetchRoomMock.mockResolvedValue({ slug: 'ok', joinable: true });
+    fetchRoomMock.mockResolvedValue({ slug: 'ok', name: 'Тест', joinable: true });
     sessionStorage.setItem('sozvon-hub.joined-room.ok', '1');
     renderRoom('ok');
     expect(await screen.findByTestId('call-screen')).toBeInTheDocument();
@@ -62,7 +63,7 @@ describe('RoomPage', () => {
   });
 
   it('does not auto-join an unavailable room even if previously joined', async () => {
-    fetchRoomMock.mockResolvedValue({ slug: 'gone', joinable: false });
+    fetchRoomMock.mockResolvedValue({ slug: 'gone', name: '', joinable: false });
     sessionStorage.setItem('sozvon-hub.joined-room.gone', '1');
     renderRoom('gone');
     expect(await screen.findByText('Комната недоступна')).toBeInTheDocument();

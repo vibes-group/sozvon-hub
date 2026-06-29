@@ -102,6 +102,52 @@ export function clearRoomJoined(slug: string): void {
   sessionStorage.removeItem(JOINED_ROOM_PREFIX + slug);
 }
 
+// Recent rooms the user has opened on this device, newest first. Lets guests
+// (who have no server-side account history) get back into a call they joined.
+// Logged-in users get an authoritative list from the server instead.
+const RECENT_ROOMS_KEY = 'sozvon-hub.recent-rooms';
+const RECENT_ROOMS_MAX = 12;
+
+export type RecentRoom = { slug: string; name: string; joinedAt: number };
+
+export function listRecentRooms(): RecentRoom[] {
+  try {
+    const raw = localStorage.getItem(RECENT_ROOMS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (r): r is RecentRoom =>
+        !!r && typeof r === 'object' && typeof (r as RecentRoom).slug === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+// Record (or refresh) a room in the recent list, keeping it newest-first,
+// deduped by slug, and capped.
+export function addRecentRoom(slug: string, name: string, joinedAt: number): void {
+  const next = [
+    { slug, name, joinedAt },
+    ...listRecentRooms().filter((r) => r.slug !== slug),
+  ].slice(0, RECENT_ROOMS_MAX);
+  try {
+    localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(next));
+  } catch {
+    /* quota or disabled storage — non-fatal */
+  }
+}
+
+export function removeRecentRoom(slug: string): void {
+  const next = listRecentRooms().filter((r) => r.slug !== slug);
+  try {
+    localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+}
+
 // Stable client identifier, generated once on first launch and persisted.
 // Sent in every `hello` so peers can key per-peer UI prefs by something that
 // survives reconnects (peer IDs are ephemeral per WS).

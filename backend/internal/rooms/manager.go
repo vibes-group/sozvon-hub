@@ -107,31 +107,58 @@ func NewManager(database *sql.DB, cfg Config) *Manager {
 type RoomInfo struct {
 	Slug      string `json:"slug"`
 	URL       string `json:"url"`
+	Name      string `json:"name"`
 	ExpiresAt string `json:"expiresAt"`
 }
 
 // Create mints a new pending room owned by createdBy and returns its shareable
 // link. The slug is unguessable and the link is joinable until expiry or until
-// the call ends.
-func (m *Manager) Create(ctx context.Context, createdBy string) (RoomInfo, error) {
+// the call ends. A blank name gets a generated friendly one.
+func (m *Manager) Create(ctx context.Context, createdBy, name string) (RoomInfo, error) {
 	slug, err := newSlug()
 	if err != nil {
 		return RoomInfo{}, err
 	}
+	if name == "" {
+		name = generateName()
+	}
 	expiresAt := m.clock().UTC().Add(m.cfg.RoomTTL).Format(timeFormat)
 	if _, err := m.db.ExecContext(ctx, `
-		insert into rooms (slug, created_by, status, expires_at)
-		values (?, ?, 'pending', ?)
-	`, slug, createdBy, expiresAt); err != nil {
+		insert into rooms (slug, created_by, name, status, expires_at)
+		values (?, ?, ?, 'pending', ?)
+	`, slug, createdBy, name, expiresAt); err != nil {
 		return RoomInfo{}, fmt.Errorf("insert room: %w", err)
 	}
-	return RoomInfo{Slug: slug, URL: "/r/" + slug, ExpiresAt: expiresAt}, nil
+	return RoomInfo{Slug: slug, URL: "/r/" + slug, Name: name, ExpiresAt: expiresAt}, nil
 }
 
-// RoomSummary is the API view of a room in its creator's list.
+// Rename changes a room's display name. Only the creator may rename, so the
+// update is scoped by created_by; an empty result means the room is missing or
+// not owned by the caller, reported as ErrRoomNotFound.
+func (m *Manager) Rename(ctx context.Context, createdBy, slug, name string) error {
+	now := m.clock().UTC().Format(timeFormat)
+	res, err := m.db.ExecContext(ctx, `
+		update rooms set name = ?, updated_at = ?
+		where slug = ? and created_by = ? and status != 'ended'
+	`, name, now, slug, createdBy)
+	if err != nil {
+		return fmt.Errorf("rename room: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rename room rows: %w", err)
+	}
+	if n == 0 {
+		return ErrRoomNotFound
+	}
+	return nil
+}
+
+// RoomSummary is the API view of a room in a user's list (created or joined).
 type RoomSummary struct {
 	Slug      string `json:"slug"`
 	URL       string `json:"url"`
+	Name      string `json:"name"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"createdAt"`
 	ExpiresAt string `json:"expiresAt"`
@@ -140,13 +167,15 @@ type RoomSummary struct {
 // ListByCreator returns the caller's still-usable rooms (pending or active),
 // newest first. Ended rooms are omitted — their links are dead.
 func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSummary, error) {
+	now := m.clock().UTC().Format(timeFormat)
 	rows, err := m.db.QueryContext(ctx, `
-		select slug, status, created_at, expires_at
+		select slug, name, status, created_at, expires_at
 		from rooms
 		where created_by = ? and status != 'ended'
+		  and (status = 'active' or expires_at > ?)
 		order by created_at desc
 		limit 100
-	`, createdBy)
+	`, createdBy, now)
 	if err != nil {
 		return nil, fmt.Errorf("list rooms: %w", err)
 	}
@@ -155,13 +184,56 @@ func (m *Manager) ListByCreator(ctx context.Context, createdBy string) ([]RoomSu
 	result := []RoomSummary{}
 	for rows.Next() {
 		var r RoomSummary
-		if err := rows.Scan(&r.Slug, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("scan room: %w", err)
 		}
 		r.URL = "/r/" + r.Slug
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+// ListJoined returns still-usable rooms the user has joined but did not create,
+// most recently joined first. Mirrors ListByCreator's "no ended rooms" rule.
+func (m *Manager) ListJoined(ctx context.Context, userID string) ([]RoomSummary, error) {
+	now := m.clock().UTC().Format(timeFormat)
+	rows, err := m.db.QueryContext(ctx, `
+		select r.slug, r.name, r.status, r.created_at, r.expires_at
+		from room_participants p
+		join rooms r on r.slug = p.slug
+		where p.user_id = ? and r.created_by != ? and r.status != 'ended'
+		  and (r.status = 'active' or r.expires_at > ?)
+		order by p.last_joined_at desc
+		limit 100
+	`, userID, userID, now)
+	if err != nil {
+		return nil, fmt.Errorf("list joined rooms: %w", err)
+	}
+	defer rows.Close()
+
+	result := []RoomSummary{}
+	for rows.Next() {
+		var r RoomSummary
+		if err := rows.Scan(&r.Slug, &r.Name, &r.Status, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan joined room: %w", err)
+		}
+		r.URL = "/r/" + r.Slug
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// recordJoin upserts a participation row so the room shows up in the user's
+// "joined" list. Best-effort: a failure here must not block joining the call.
+func (m *Manager) recordJoin(ctx context.Context, slug, userID string) {
+	now := m.clock().UTC().Format(timeFormat)
+	if _, err := m.db.ExecContext(ctx, `
+		insert into room_participants (slug, user_id, first_joined_at, last_joined_at)
+		values (?, ?, ?, ?)
+		on conflict(slug, user_id) do update set last_joined_at = excluded.last_joined_at
+	`, slug, userID, now, now); err != nil {
+		log.Printf("rooms: record join %q/%q: %v", slug, userID, err)
+	}
 }
 
 // Joinable reports whether a slug can currently be joined: it must exist, not be
@@ -179,6 +251,30 @@ func (m *Manager) Joinable(ctx context.Context, slug string) (bool, error) {
 		return false, fmt.Errorf("select room: %w", err)
 	}
 	return m.statusJoinable(status, expiresAt), nil
+}
+
+// RoomView is the public view of a single room by slug: its display name and
+// whether it can currently be joined.
+type RoomView struct {
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Joinable bool   `json:"joinable"`
+}
+
+// Get returns a room's name and joinability by slug, for the join screen.
+// Returns ErrRoomNotFound for missing slugs so callers can 404.
+func (m *Manager) Get(ctx context.Context, slug string) (RoomView, error) {
+	var name, status, expiresAt string
+	err := m.db.QueryRowContext(ctx,
+		`select name, status, expires_at from rooms where slug = ?`, slug,
+	).Scan(&name, &status, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RoomView{}, ErrRoomNotFound
+	}
+	if err != nil {
+		return RoomView{}, fmt.Errorf("select room: %w", err)
+	}
+	return RoomView{Slug: slug, Name: name, Joinable: m.statusJoinable(status, expiresAt)}, nil
 }
 
 func (m *Manager) statusJoinable(status, expiresAt string) bool {
@@ -202,11 +298,17 @@ var ErrRoomNotFound = errors.New("room not found")
 // ServeWS validates joinability, lazily creates the live SFU room, and serves
 // the peer's WebSocket session. On first join the room is promoted to active; on
 // the last leave it is ended and torn down.
-func (m *Manager) ServeWS(w http.ResponseWriter, r *http.Request, slug string) {
+func (m *Manager) ServeWS(w http.ResponseWriter, r *http.Request, slug, userID string) {
 	joinable, err := m.Joinable(r.Context(), slug)
 	if err != nil || !joinable {
 		http.Error(w, "room not available", http.StatusForbidden)
 		return
+	}
+
+	// Logged-in joiners are recorded so the room shows in their "joined" list;
+	// guests (empty userID) keep their history client-side instead.
+	if userID != "" {
+		m.recordJoin(r.Context(), slug, userID)
 	}
 
 	lr, err := m.acquire(slug)

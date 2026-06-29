@@ -39,7 +39,7 @@ func TestCreate(t *testing.T) {
 	m, database, clock := newTestManager(t)
 	ctx := context.Background()
 
-	info, err := m.Create(ctx, creator)
+	info, err := m.Create(ctx, creator, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestJoinable(t *testing.T) {
 	m, database, clock := newTestManager(t)
 	ctx := context.Background()
 
-	info, err := m.Create(ctx, creator)
+	info, err := m.Create(ctx, creator, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -119,9 +119,9 @@ func TestListByCreator(t *testing.T) {
 	// Three rooms for the creator with explicit, distinct created_at so the
 	// newest-first ordering is deterministic (created_at is filled by a DB
 	// wall-clock default, not the test clock).
-	first, _ := m.Create(ctx, creator)
-	second, _ := m.Create(ctx, creator)
-	third, _ := m.Create(ctx, creator)
+	first, _ := m.Create(ctx, creator, "")
+	second, _ := m.Create(ctx, creator, "")
+	third, _ := m.Create(ctx, creator, "")
 	setCreatedAt(t, database, first.Slug, "2026-06-29T12:00:00.000000000Z")
 	setCreatedAt(t, database, second.Slug, "2026-06-29T12:00:01.000000000Z")
 	setCreatedAt(t, database, third.Slug, "2026-06-29T12:00:02.000000000Z")
@@ -131,7 +131,7 @@ func TestListByCreator(t *testing.T) {
 	setStatus(t, database, second.Slug, "active")
 
 	insertUser(t, database, "other")
-	if _, err := m.Create(ctx, "other"); err != nil {
+	if _, err := m.Create(ctx, "other", ""); err != nil {
 		t.Fatalf("create other room: %v", err)
 	}
 
@@ -160,8 +160,8 @@ func TestSweep(t *testing.T) {
 	m, database, clock := newTestManager(t)
 	ctx := context.Background()
 
-	stale, _ := m.Create(ctx, creator)
-	fresh, _ := m.Create(ctx, creator)
+	stale, _ := m.Create(ctx, creator, "")
+	fresh, _ := m.Create(ctx, creator, "")
 	setStatus(t, database, fresh.Slug, "active")
 
 	// Move time past the pending room's TTL and sweep.
@@ -199,7 +199,7 @@ func (f *fakeTimer) Stop() bool {
 // DB row, and captures every grace timer the manager schedules.
 func emptyLiveRoom(t *testing.T, m *Manager) (slug string, room *stubRoom, timers *[]*fakeTimer) {
 	t.Helper()
-	info, err := m.Create(context.Background(), creator)
+	info, err := m.Create(context.Background(), creator, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
