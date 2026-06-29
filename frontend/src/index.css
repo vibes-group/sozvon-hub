@@ -45,6 +45,12 @@
     line-height: 1.55;
     color: var(--color-body);
     background-color: var(--color-bg-0);
+    /* App-like UI: tapping chrome (headings, buttons, labels) shouldn't select
+       text or flash a highlight. Content that should stay selectable opts back
+       in with the `select-text` utility. */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   input,
@@ -52,6 +58,13 @@
   select,
   button {
     font-family: inherit;
+  }
+
+  input,
+  textarea,
+  [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   *::-webkit-scrollbar {

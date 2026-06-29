@@ -603,7 +603,7 @@ const MessageRow = memo(function MessageRow({
 
       <div className="flex items-baseline gap-2">
         {msg.text && (
-          <p className="m-0 flex-1 text-[15px] text-body break-words whitespace-pre-wrap">
+          <p className="m-0 flex-1 select-text text-[15px] text-body break-words whitespace-pre-wrap">
             {renderedText}
           </p>
         )}
