@@ -204,11 +204,15 @@ function RecentRoomsCard() {
     setRecent(listRecentRooms());
   }, []);
 
-  if (recent.length === 0) return null;
-
   return (
     <section className="card grid gap-3">
-      <h2 className="card-title">Недавние комнаты</h2>
+      <h2 className="card-title">Комнаты</h2>
+      {recent.length === 0 && (
+        <p className="text-[13px] text-muted-2">
+          Пока пусто. Откройте ссылку на звонок, чтобы присоединиться.
+        </p>
+      )}
+      {recent.length > 0 && (
       <ul className="grid gap-2">
         {recent.map((r) => (
           <li
@@ -232,6 +236,7 @@ function RecentRoomsCard() {
           </li>
         ))}
       </ul>
+      )}
     </section>
   );
 }
