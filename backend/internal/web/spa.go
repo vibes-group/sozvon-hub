@@ -2,7 +2,6 @@ package web
 
 import (
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -12,24 +11,22 @@ import (
 // under /assets or /vendor are pure build output and 404 instead of falling
 // back, avoiding index.html being served in place of a missing bundle.
 func Handler(dir string) http.Handler {
-	fileServer := http.FileServer(http.Dir(dir))
-	root := filepath.Clean(dir)
-	index := filepath.Join(root, "index.html")
+	root := http.Dir(dir)
+	fileServer := http.FileServer(root)
+	index := filepath.Join(dir, "index.html")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := filepath.Clean(r.URL.Path)
 
-		// Resolve against root and confirm the result stays within it before
-		// touching the filesystem, so a crafted URL path cannot escape dir.
-		full := filepath.Join(root, clean)
-		if full != root && !strings.HasPrefix(full, root+string(os.PathSeparator)) {
-			http.NotFound(w, r)
-			return
-		}
-
-		if info, err := os.Stat(full); err == nil && !info.IsDir() {
-			fileServer.ServeHTTP(w, r)
-			return
+		// Resolve existence through http.Dir, which confines access to dir and
+		// rejects traversal, so a crafted URL path cannot escape it.
+		if f, err := root.Open(clean); err == nil {
+			info, statErr := f.Stat()
+			f.Close()
+			if statErr == nil && !info.IsDir() {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		if strings.HasPrefix(clean, "/assets/") || strings.HasPrefix(clean, "/vendor/") {
