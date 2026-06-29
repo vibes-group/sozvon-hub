@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -102,6 +103,9 @@ func decodeHash(encodedHash string) (PasswordParams, []byte, []byte, error) {
 		case "t":
 			params.Iterations = uint32(value)
 		case "p":
+			if value > math.MaxUint8 {
+				return PasswordParams{}, nil, nil, errors.New("invalid password hash param value")
+			}
 			params.Parallelism = uint8(value)
 		default:
 			return PasswordParams{}, nil, nil, errors.New("unknown password hash param")

@@ -13,12 +13,21 @@ import (
 // back, avoiding index.html being served in place of a missing bundle.
 func Handler(dir string) http.Handler {
 	fileServer := http.FileServer(http.Dir(dir))
-	index := filepath.Join(dir, "index.html")
+	root := filepath.Clean(dir)
+	index := filepath.Join(root, "index.html")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := filepath.Clean(r.URL.Path)
 
-		if info, err := os.Stat(filepath.Join(dir, clean)); err == nil && !info.IsDir() {
+		// Resolve against root and confirm the result stays within it before
+		// touching the filesystem, so a crafted URL path cannot escape dir.
+		full := filepath.Join(root, clean)
+		if full != root && !strings.HasPrefix(full, root+string(os.PathSeparator)) {
+			http.NotFound(w, r)
+			return
+		}
+
+		if info, err := os.Stat(full); err == nil && !info.IsDir() {
 			fileServer.ServeHTTP(w, r)
 			return
 		}

@@ -78,6 +78,12 @@ func (c Config) Validate() error {
 	if c.PublicIP == "" && !c.AllowInsecure {
 		return errors.New("PUBLIC_IP must be set (used by SFU NAT mapping and TURN relay address)")
 	}
+	if c.UDPPortMin >= c.UDPPortMax {
+		return errors.New("UDP_PORT_MIN must be less than UDP_PORT_MAX")
+	}
+	if c.TurnRelayMin > c.TurnRelayMax {
+		return errors.New("TURN_RELAY_PORT_MIN must be less than or equal to TURN_RELAY_PORT_MAX")
+	}
 	return nil
 }
 
