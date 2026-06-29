@@ -32,6 +32,13 @@ type UseSessionManagerDeps = {
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000, 30000] as const;
 
+// On Android a camera NotAllowedError is usually the browser app lacking the OS
+// camera permission (or the system Camera-access toggle being off), not a
+// per-site block — sending users to "site settings" lands them on an empty
+// page. We can't tell the layers apart from JS (all yield NotAllowedError), but
+// we can point Android users at the right places.
+const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+
 export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDeps) {
   const getStore = useStore.getState;
 
@@ -448,7 +455,10 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
       }
       if (name === 'NotAllowedError' || name === 'AbortError') {
         getStore().setStatus(
-          'Доступ к камере не разрешён. Разрешите камеру для сайта в настройках браузера.',
+          IS_ANDROID
+            ? 'Доступ к камере не разрешён. На Android: разрешите камеру браузеру ' +
+                '(Настройки → Приложения → ваш браузер → Разрешения) и проверьте «Доступ к камере» в шторке.'
+            : 'Доступ к камере не разрешён. Разрешите камеру для сайта в настройках браузера.',
           true,
           true,
         );
