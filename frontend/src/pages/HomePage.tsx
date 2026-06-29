@@ -50,7 +50,7 @@ export default function HomePage() {
   }
 
   return (
-    <main className="relative min-h-dvh bg-bg-0 text-body px-4 py-10 grid place-items-center">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center bg-bg-0 text-body px-4 py-10">
       {me && <AccountControls onLogout={() => setMe(null)} />}
       {!me && !inviteToken && !showLogin && (
         <button
