@@ -29,7 +29,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -141,6 +144,7 @@ func main() {
 		StunURL:          stunURL,
 		TurnURL:          turnURL,
 		TurnSharedSecret: turnSharedSecret,
+		TrustedProxies:   cfg.TrustedProxies,
 	}, web.Handler(cfg.WebDir))
 
 	server := &http.Server{

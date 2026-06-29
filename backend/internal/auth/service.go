@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"sozvon-hub/backend/internal/ratelimit"
 )
 
 const DefaultCookieName = "sh_session"
@@ -30,10 +32,30 @@ type Config struct {
 	PasswordParams PasswordParams
 }
 
+// Login lockout tuning: after this many consecutive failed logins for a single
+// username, attempts are blocked for a back-off doubling from base to max. This
+// guards one account against distributed credential stuffing that the per-IP
+// HTTP limiter alone would miss.
+const (
+	loginFailThreshold = 8
+	loginLockBase      = time.Minute
+	loginLockMax       = 15 * time.Minute
+)
+
 type Service struct {
-	db  *sql.DB
-	cfg Config
+	db        *sql.DB
+	cfg       Config
+	lockout   *ratelimit.Lockout
+	dummyHash string
 }
+
+// LockedError reports that an account is temporarily locked after too many
+// failed logins. RetryAfter is how long until the next attempt is allowed.
+type LockedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *LockedError) Error() string { return "account_locked" }
 
 type sessionMetaKey struct{}
 
@@ -103,7 +125,22 @@ func NewService(database *sql.DB, cfg Config) *Service {
 	if cfg.PasswordParams.MemoryKiB == 0 {
 		cfg.PasswordParams = DefaultPasswordParams()
 	}
-	return &Service{db: database, cfg: cfg}
+	s := &Service{
+		db:  database,
+		cfg: cfg,
+		lockout: ratelimit.NewLockout(ratelimit.LockoutConfig{
+			Threshold: loginFailThreshold,
+			BaseDelay: loginLockBase,
+			MaxDelay:  loginLockMax,
+		}),
+	}
+	// Precomputed hash to verify against for unknown usernames, so a login for a
+	// missing user costs the same argon2 time as a real one — no timing oracle
+	// for username enumeration.
+	if h, err := HashPassword("timing-equalizer", cfg.PasswordParams); err == nil {
+		s.dummyHash = h
+	}
+	return s
 }
 
 func (s *Service) RegisterWithInvite(ctx context.Context, inviteToken, username, password string) (string, User, error) {
@@ -382,10 +419,24 @@ func (s *Service) AdminUpdateUser(ctx context.Context, userID string, canInvite 
 	return nil
 }
 
+// failLogin records a failed attempt against the username's lockout. It returns
+// LockedError once the failure trips the threshold (so the caller learns to back
+// off), otherwise the generic ErrInvalidCredentials.
+func (s *Service) failLogin(username string) error {
+	if wait := s.lockout.Fail(username); wait > 0 {
+		return &LockedError{RetryAfter: wait}
+	}
+	return ErrInvalidCredentials
+}
+
 func (s *Service) Login(ctx context.Context, username, password string) (string, User, error) {
 	normalizedUsername, err := normalizeUsername(username)
 	if err != nil {
 		return "", User{}, ErrInvalidCredentials
+	}
+
+	if wait := s.lockout.Retry(normalizedUsername); wait > 0 {
+		return "", User{}, &LockedError{RetryAfter: wait}
 	}
 
 	var userID, passwordHash, name string
@@ -395,7 +446,10 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		normalizedUsername,
 	).Scan(&userID, &passwordHash, &name, &isAdmin, &canInvite)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", User{}, ErrInvalidCredentials
+		// Verify against the dummy hash so an unknown user costs the same time as
+		// a real one, then count the attempt against the lockout all the same.
+		_, _ = VerifyPassword(password, s.dummyHash)
+		return "", User{}, s.failLogin(normalizedUsername)
 	}
 	if err != nil {
 		return "", User{}, fmt.Errorf("select user credentials: %w", err)
@@ -403,8 +457,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 
 	ok, err := VerifyPassword(password, passwordHash)
 	if err != nil || !ok {
-		return "", User{}, ErrInvalidCredentials
+		return "", User{}, s.failLogin(normalizedUsername)
 	}
+	s.lockout.Reset(normalizedUsername)
 
 	token, tokenHash, err := newOpaqueToken()
 	if err != nil {

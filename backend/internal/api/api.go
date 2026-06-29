@@ -9,14 +9,18 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/time/rate"
+
 	"sozvon-hub/backend/internal/auth"
 	"sozvon-hub/backend/internal/filestore"
+	"sozvon-hub/backend/internal/ratelimit"
 	"sozvon-hub/backend/internal/rooms"
 	turnsrv "sozvon-hub/backend/internal/turn"
 )
@@ -24,6 +28,19 @@ import (
 // turnCredsTTL is long enough to cover a typical call and brief reconnects, short
 // enough to limit exposure if a credential leaks.
 const turnCredsTTL = 6 * time.Hour
+
+// Rate-limit tuning. The auth bucket throttles the password-guessing and
+// argon2-DoS surface (login/register/change-password); the global bucket is a
+// looser per-IP backstop on the whole /api surface (room scraping, TURN-cred
+// minting). Both key on the real client IP (clientIP).
+const (
+	authRate      = rate.Limit(1.0 / 6.0) // ~10 attempts/min sustained
+	authBurst     = 10
+	globalRate    = rate.Limit(5) // 5 req/s sustained
+	globalBurst   = 60
+	rateLimitTTL  = time.Hour
+	rateLimitKeys = 1 << 16
+)
 
 // Deps bundles everything the handlers need.
 type Deps struct {
@@ -33,11 +50,17 @@ type Deps struct {
 	StunURL          string
 	TurnURL          string
 	TurnSharedSecret string
+	// TrustedProxies are the CIDRs whose RemoteAddr may set X-Forwarded-For;
+	// clientIP keys rate limits and session IP-hashes on the real client.
+	TrustedProxies []netip.Prefix
 }
 
-// Routes registers every HTTP route on a fresh mux and returns it.
-func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
+// Routes registers every HTTP route on a fresh mux and returns the handler,
+// wrapped in a per-IP rate-limit backstop over the /api surface.
+func Routes(d Deps, webHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
+
+	authLimiter := ratelimit.New(ratelimit.Config{Rate: authRate, Burst: authBurst, TTL: rateLimitTTL, MaxKeys: rateLimitKeys})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -45,11 +68,11 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	})
 
 	mux.HandleFunc("GET /api/auth/me", d.authMe)
-	mux.HandleFunc("POST /api/auth/register", d.authRegister)
-	mux.HandleFunc("POST /api/auth/login", d.authLogin)
+	mux.HandleFunc("POST /api/auth/register", limit(authLimiter, d.TrustedProxies, d.authRegister))
+	mux.HandleFunc("POST /api/auth/login", limit(authLimiter, d.TrustedProxies, d.authLogin))
 	mux.HandleFunc("POST /api/auth/logout", d.authLogout)
 	mux.HandleFunc("PATCH /api/account", d.accountUpdate)
-	mux.HandleFunc("POST /api/account/password", d.accountChangePassword)
+	mux.HandleFunc("POST /api/account/password", limit(authLimiter, d.TrustedProxies, d.accountChangePassword))
 
 	mux.HandleFunc("POST /api/invites", d.inviteCreate)
 	mux.HandleFunc("GET /api/invites", d.invitesList)
@@ -71,7 +94,54 @@ func Routes(d Deps, webHandler http.Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ws/{slug}", d.serveWS)
 
 	mux.Handle("/", webHandler)
-	return mux
+
+	globalLimiter := ratelimit.New(ratelimit.Config{Rate: globalRate, Burst: globalBurst, TTL: rateLimitTTL, MaxKeys: rateLimitKeys})
+	return apiRateLimit(globalLimiter, d.TrustedProxies, mux)
+}
+
+// limit wraps a handler with a per-IP token bucket, replying 429 (+ Retry-After)
+// when the caller is over budget.
+func limit(l *ratelimit.Limiter, trusted []netip.Prefix, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectIfLimited(l, trusted, w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+// apiRateLimit is the global per-IP backstop over the /api surface. The
+// WebSocket, static assets, and health probe are deliberately exempt: /ws is
+// long-lived (one connection, not a request stream) and the rest are cheap and
+// public.
+func apiRateLimit(l *ratelimit.Limiter, trusted []netip.Prefix, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && rejectIfLimited(l, trusted, w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// rejectIfLimited charges one token for r's client IP. If over budget it writes
+// a 429 (+ Retry-After) and returns true so the caller stops; otherwise false.
+func rejectIfLimited(l *ratelimit.Limiter, trusted []netip.Prefix, w http.ResponseWriter, r *http.Request) bool {
+	ok, retry := l.Allow(clientIP(r, trusted))
+	if ok {
+		return false
+	}
+	if retry > 0 {
+		w.Header().Set("Retry-After", retryAfterSeconds(retry))
+	}
+	writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})
+	return true
+}
+
+// retryAfterSeconds renders a duration as whole seconds (rounded up, min 1) for
+// the Retry-After header.
+func retryAfterSeconds(d time.Duration) string {
+	secs := max(int((d+time.Second-1)/time.Second), 1)
+	return strconv.Itoa(secs)
 }
 
 // --- Auth ---
@@ -101,7 +171,7 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	token, user, err := d.Auth.RegisterWithInvite(withSessionMeta(r), body.InviteToken, body.Username, body.Password)
+	token, user, err := d.Auth.RegisterWithInvite(withSessionMeta(d.TrustedProxies, r), body.InviteToken, body.Username, body.Password)
 	if err != nil {
 		writeAuthError(w, err)
 		return
@@ -115,7 +185,7 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	token, user, err := d.Auth.Login(withSessionMeta(r), body.Username, body.Password)
+	token, user, err := d.Auth.Login(withSessionMeta(d.TrustedProxies, r), body.Username, body.Password)
 	if err != nil {
 		writeAuthError(w, err)
 		return
@@ -483,6 +553,12 @@ func clampName(name string) string {
 }
 
 func writeAuthError(w http.ResponseWriter, err error) {
+	var locked *auth.LockedError
+	if errors.As(err, &locked) {
+		w.Header().Set("Retry-After", retryAfterSeconds(locked.RetryAfter))
+		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "too_many_attempts"})
+		return
+	}
 	switch {
 	case errors.Is(err, auth.ErrNotAuthenticated):
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "not_authenticated"})
@@ -504,26 +580,62 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	}
 }
 
-func withSessionMeta(r *http.Request) context.Context {
+func withSessionMeta(trusted []netip.Prefix, r *http.Request) context.Context {
 	userAgent := r.UserAgent()
 	if len(userAgent) > 256 {
 		userAgent = userAgent[:256]
 	}
-	ipHash := sha256.Sum256([]byte(clientIP(r)))
+	ipHash := sha256.Sum256([]byte(clientIP(r, trusted)))
 	return auth.WithSessionMeta(r.Context(), auth.SessionMeta{UserAgent: userAgent, IPHash: ipHash[:]})
 }
 
-// clientIP trusts X-Forwarded-For: the backend binds loopback behind the proxy.
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		if comma := strings.IndexByte(forwarded, ','); comma >= 0 {
-			return strings.TrimSpace(forwarded[:comma])
-		}
-		return strings.TrimSpace(forwarded)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
+// clientIP returns the request's source IP, treating X-Forwarded-For as
+// authoritative only when RemoteAddr is itself a trusted proxy. The XFF chain
+// is walked right-to-left (last hop = most trusted): trusted entries are
+// stripped, the first untrusted entry is the real source. Any malformed token
+// fails safe to RemoteAddr, since a partially-parsed chain cannot be trusted to
+// identify the real client. trusted is the proxy CIDR list (loopback by
+// default, the docker network range in prod compose).
+func clientIP(r *http.Request, trusted []netip.Prefix) string {
+	addr, ok := remoteAddrIP(r)
+	if !ok {
 		return r.RemoteAddr
 	}
-	return host
+	if !inAny(addr, trusted) {
+		return addr.String()
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return addr.String()
+	}
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		cand, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+		if err != nil {
+			return addr.String()
+		}
+		if !inAny(cand.Unmap(), trusted) {
+			return cand.Unmap().String()
+		}
+	}
+	return addr.String()
+}
+
+func remoteAddrIP(r *http.Request) (netip.Addr, bool) {
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return ap.Addr().Unmap(), true
+	}
+	if a, err := netip.ParseAddr(r.RemoteAddr); err == nil {
+		return a.Unmap(), true
+	}
+	return netip.Addr{}, false
+}
+
+func inAny(a netip.Addr, prefixes []netip.Prefix) bool {
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }

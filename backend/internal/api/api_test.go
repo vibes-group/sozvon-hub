@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -377,6 +378,66 @@ func TestAdmin(t *testing.T) {
 	resp = doJSON(t, bobClient, http.MethodPost, srv.URL+"/api/invites", map[string]any{})
 	mustStatus(t, resp, http.StatusCreated)
 	resp.Body.Close()
+}
+
+func TestLoginRateLimitedByIP(t *testing.T) {
+	srv, _, _ := newEnv(t)
+
+	// Vary the username each call so the per-username lockout never trips first;
+	// this isolates the per-IP limiter. Unknown users → 401 until the burst is
+	// spent, then 429 "rate_limited" with a Retry-After hint.
+	c := client(t)
+	var got *http.Response
+	for i := 0; i < 50; i++ {
+		got = doJSON(t, c, http.MethodPost, srv.URL+"/api/auth/login", map[string]string{
+			"username": "ghost" + strconv.Itoa(i), "password": "whatever",
+		})
+		if i == 0 && got.StatusCode == http.StatusTooManyRequests {
+			t.Fatal("first attempt should not be rate limited")
+		}
+		if got.StatusCode == http.StatusTooManyRequests {
+			break
+		}
+		got.Body.Close()
+	}
+	mustStatus(t, got, http.StatusTooManyRequests)
+	if got.Header.Get("Retry-After") == "" {
+		t.Fatal("expected Retry-After header on 429")
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	decode(t, got, &body)
+	if body.Error != "rate_limited" {
+		t.Fatalf("error = %q, want rate_limited", body.Error)
+	}
+}
+
+func TestLoginLockedByUsername(t *testing.T) {
+	srv, svc, _ := newEnv(t)
+	token := bootstrapToken(t, svc)
+	registerUser(t, srv, token, "alice", "password123")
+
+	// Hammer one username with the wrong password. The per-username lockout trips
+	// before the per-IP burst, so the 429 carries error "too_many_attempts".
+	var got *http.Response
+	for i := 0; i < 50; i++ {
+		got = doJSON(t, client(t), http.MethodPost, srv.URL+"/api/auth/login", map[string]string{
+			"username": "alice", "password": "wrong",
+		})
+		if got.StatusCode == http.StatusTooManyRequests {
+			break
+		}
+		got.Body.Close()
+	}
+	mustStatus(t, got, http.StatusTooManyRequests)
+	var body struct {
+		Error string `json:"error"`
+	}
+	decode(t, got, &body)
+	if body.Error != "too_many_attempts" {
+		t.Fatalf("error = %q, want too_many_attempts", body.Error)
+	}
 }
 
 func TestAccountUpdate(t *testing.T) {

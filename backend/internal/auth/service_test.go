@@ -341,6 +341,51 @@ func TestLogin(t *testing.T) {
 	}
 }
 
+func TestLoginLockout(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	bootstrapUser(t, svc, "alice", "password123")
+
+	// Wrong passwords up to (threshold-1) stay generic invalid-credentials.
+	for i := 0; i < loginFailThreshold-1; i++ {
+		if _, _, err := svc.Login(ctx, "alice", "wrong"); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("attempt %d: expected ErrInvalidCredentials, got %v", i, err)
+		}
+	}
+
+	// The attempt that trips the threshold returns LockedError with a back-off.
+	var locked *LockedError
+	if _, _, err := svc.Login(ctx, "alice", "wrong"); !errors.As(err, &locked) {
+		t.Fatalf("expected LockedError at threshold, got %v", err)
+	}
+	if locked.RetryAfter <= 0 {
+		t.Fatalf("expected positive RetryAfter, got %v", locked.RetryAfter)
+	}
+
+	// While locked, even the correct password is refused (lockout checked first).
+	if _, _, err := svc.Login(ctx, "alice", "password123"); !errors.As(err, &locked) {
+		t.Fatalf("expected LockedError for correct password while locked, got %v", err)
+	}
+}
+
+func TestLoginResetClearsLockout(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	bootstrapUser(t, svc, "alice", "password123")
+
+	// A few failures, then a success resets the counter.
+	for i := 0; i < loginFailThreshold-1; i++ {
+		_, _, _ = svc.Login(ctx, "alice", "wrong")
+	}
+	if _, _, err := svc.Login(ctx, "alice", "password123"); err != nil {
+		t.Fatalf("login with correct password: %v", err)
+	}
+	// After the reset a fresh wrong attempt is generic again, not locked.
+	if _, _, err := svc.Login(ctx, "alice", "wrong"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials after reset, got %v", err)
+	}
+}
+
 func TestCurrentUserAndLogout(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

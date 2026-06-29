@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"log"
+	"net/netip"
 	"os"
 	"strconv"
 	"time"
@@ -16,6 +17,10 @@ type Config struct {
 	TurnRealm     string
 	CookieSecure  bool
 	AllowInsecure bool
+
+	// CIDR prefixes whose RemoteAddr is allowed to set X-Forwarded-For.
+	// Default loopback-only; prod compose pins the docker network range.
+	TrustedProxies []netip.Prefix
 
 	DBPath          string
 	BootstrapInvite bool
@@ -41,8 +46,12 @@ const (
 	roomGrace  = 5 * time.Minute
 )
 
-func Load() Config {
+func Load() (Config, error) {
 	hostname := env("APP_HOSTNAME", "localhost")
+	trusted, err := ParseTrustedProxies(os.Getenv("APP_TRUSTED_PROXIES"))
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		Addr:          env("APP_ADDR", ":8080"),
 		WebDir:        env("APP_WEB_DIR", "./web"),
@@ -51,6 +60,8 @@ func Load() Config {
 		TurnRealm:     hostname,
 		CookieSecure:  envBool("APP_COOKIE_SECURE", true),
 		AllowInsecure: envBool("APP_ALLOW_INSECURE", false),
+
+		TrustedProxies: trusted,
 
 		DBPath:          env("APP_DB_PATH", "./data/sozvon-hub.db"),
 		BootstrapInvite: envBool("APP_BOOTSTRAP_INVITE", false),
@@ -65,7 +76,7 @@ func Load() Config {
 		UDPPortMax:   envUint16("UDP_PORT_MAX", 10200),
 		TurnRelayMin: envUint16("TURN_RELAY_PORT_MIN", 49160),
 		TurnRelayMax: envUint16("TURN_RELAY_PORT_MAX", 49199),
-	}
+	}, nil
 }
 
 // Validate refuses combinations that are only acceptable in local dev. In
