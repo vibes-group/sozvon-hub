@@ -60,11 +60,81 @@ function totalHeight(rows: LayoutRow[], gap: number): number {
   return rows.reduce((s, r) => s + r.h, 0) + gap * (rows.length - 1);
 }
 
+// Above this tile count we skip the exhaustive partition search (2^(N-1)
+// arrangements) and fall back to greedy justified rows + scroll. Real calls
+// almost never have this many cameras on at once.
+const MAX_ENUM = 12;
+
+// Exhaustively pick the best way to split `items` into contiguous rows so the
+// whole grid fits the box AND the tiles are as large as possible. Input order
+// is preserved (rows are contiguous), so the result stays consistent with the
+// participant ordering. Each row is justified to fill the width, so row heights
+// vary by content — two portraits make a tall row, one landscape a short one,
+// which is what yields "2 tall tiles on top, 1 wide below" on a phone.
+//
+// Quality metric: maximize the SMALLEST tile area, so no feed ends up tiny.
+// Returns null when nothing fits (every arrangement overflows or undershoots
+// minH) — the caller then falls back to the scrolling greedy layout.
+function bestFittingLayout(
+  items: LayoutInput[],
+  width: number,
+  height: number,
+  gap: number,
+  minH: number,
+): Layout | null {
+  const n = items.length;
+  const ars = items.map((it) => clampAr(it.ar));
+  let best: Layout | null = null;
+  let bestScore = -1;
+
+  // Each of the n-1 gaps between items is either a row break or not.
+  const combos = 1 << (n - 1);
+  for (let mask = 0; mask < combos; mask++) {
+    const rows: LayoutRow[] = [];
+    let minArea = Infinity;
+    let ok = true;
+    let start = 0;
+    for (let i = 0; i < n; i++) {
+      const isBreak = i === n - 1 || (mask & (1 << i)) !== 0;
+      if (!isBreak) continue;
+      const count = i - start + 1;
+      let arSum = 0;
+      for (let j = start; j <= i; j++) arSum += ars[j];
+      const h = (width - gap * (count - 1)) / arSum;
+      if (h < minH) {
+        ok = false;
+        break;
+      }
+      const tiles: PlacedTile[] = [];
+      for (let j = start; j <= i; j++) {
+        const w = ars[j] * h;
+        tiles.push({ id: items[j].id, w, h });
+        const area = w * h;
+        if (area < minArea) minArea = area;
+      }
+      rows.push({ h, tiles });
+      start = i + 1;
+    }
+    if (!ok) continue;
+    const total = totalHeight(rows, gap);
+    if (total > height) continue;
+    // Strict `>` so the first arrangement found wins ties → deterministic.
+    if (minArea > bestScore) {
+      bestScore = minArea;
+      best = { rows, height: total };
+    }
+  }
+  return best;
+}
+
 /**
  * Lay out `items` (each with an aspect ratio) inside a `width`×`height` box.
- * Picks the largest row height (within [minH, maxH]) that still fits vertically;
- * if even the smallest height overflows (too many tiles), returns the
- * smallest-height layout and the caller scrolls.
+ *
+ * For a handful of tiles, an exhaustive search picks the row split that fits and
+ * makes the tiles as large as possible (adapts to portrait vs landscape boxes).
+ * Above MAX_ENUM tiles — or when nothing fits — it falls back to greedy
+ * justified rows at the largest row height that fits, scrolling if even the
+ * smallest height overflows.
  */
 export function justifiedLayout(
   items: LayoutInput[],
@@ -76,6 +146,11 @@ export function justifiedLayout(
   if (!items.length || width <= 0) return { rows: [], height: 0 };
   const minH = opts?.minH ?? 90;
   const maxH = Math.max(minH, opts?.maxH ?? height);
+
+  if (items.length <= MAX_ENUM && height > 0) {
+    const exact = bestFittingLayout(items, width, height, gap, minH);
+    if (exact) return exact;
+  }
 
   let lo = minH;
   let hi = maxH;

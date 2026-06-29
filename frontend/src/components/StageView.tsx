@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Grid3x3, Volume2, VolumeX } from 'lucide-react';
-import { useScreenShareStore } from '../store/useScreenShareStore';
+import { selectOtherShares, useScreenShareStore } from '../store/useScreenShareStore';
 import { useStore, selectParticipants, selectSelfPeerId } from '../store/useStore';
 import { useCameraStore } from '../store/useCameraStore';
 import { loadScreenAudioVolume, saveScreenAudioVolume } from '../utils/storage';
@@ -29,10 +29,7 @@ export function StageView({ stage, onSetStage, onClose, onLocalAudioChange }: Pr
   const myStatus = useScreenShareStore((s) => s.myStatus);
 
   const showSelfShare = myStatus === 'publishing' && !!myStream;
-  const otherShares = useMemo(
-    () => Array.from(shares.values()).filter((sh) => sh.publisherId !== selfId),
-    [shares, selfId],
-  );
+  const otherShares = useMemo(() => selectOtherShares(shares, selfId), [shares, selfId]);
 
   // Filmstrip = every tile except the one on stage; keeps room context.
   const onStage = (kind: StageTarget['kind'], id: string) =>

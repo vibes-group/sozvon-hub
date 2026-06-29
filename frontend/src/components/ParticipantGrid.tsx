@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
-import { useScreenShareStore } from '../store/useScreenShareStore';
+import { selectOtherShares, useScreenShareStore } from '../store/useScreenShareStore';
 import type { ParticipantUI } from '../types';
 import { justifiedLayout, type LayoutInput, type StageTarget } from './tileLayout';
 import { AudioChip, CameraTile, ScreenShareTile, SelfScreenTile } from './CallTiles';
@@ -45,10 +45,7 @@ export function ParticipantGrid({
   const myStream = useScreenShareStore((s) => s.myStream);
   const myStatus = useScreenShareStore((s) => s.myStatus);
 
-  const otherShares = useMemo(
-    () => Array.from(shares.values()).filter((sh) => sh.publisherId !== selfId),
-    [shares, selfId],
-  );
+  const otherShares = useMemo(() => selectOtherShares(shares, selfId), [shares, selfId]);
   const showSelfShare = myStatus === 'publishing' && !!myStream;
 
   // Video tiles lead (screens first), audio-only participants collapse to chips.

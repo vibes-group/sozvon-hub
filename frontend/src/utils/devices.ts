@@ -13,13 +13,17 @@ export const IS_DESKTOP =
 // unavailable. Matches voice-hub.
 export function listInputDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
   return (navigator.mediaDevices?.enumerateDevices?.() ?? Promise.resolve([])).then((all) =>
-    all.filter(
-      (d) =>
-        d.kind === kind &&
-        d.deviceId &&
-        d.deviceId !== 'default' &&
-        d.deviceId !== 'communications',
-    ),
+    all
+      .filter(
+        (d) =>
+          d.kind === kind &&
+          d.deviceId &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications',
+      )
+      // enumerateDevices() order is browser/OS-defined and unstable; sort by
+      // label so the dropdown order is consistent across reloads and browsers.
+      .sort((a, b) => a.label.localeCompare(b.label)),
   );
 }
 

@@ -37,9 +37,12 @@ export type ChatMessage = {
 export type JoinState = 'idle' | 'joining' | 'joined';
 type StatusState = 'idle' | 'ok' | 'err';
 
+// Order purely by a stable key so every client renders participants in the
+// SAME order. No self-first: that key differs per device and would make the
+// global order disagree between clients (you'd see yourself first, they'd see
+// themselves first). clientId is a stable per-install id; id is the SFU peer id
+// — both identical across all clients for a given participant.
 function compareParticipants(a: ParticipantUI, b: ParticipantUI): number {
-  if (a.isSelf) return -1;
-  if (b.isSelf) return 1;
   return (a.clientId ?? a.id).localeCompare(b.clientId ?? b.id);
 }
 

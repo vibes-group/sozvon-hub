@@ -343,8 +343,10 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
         .map((sh) => sh.publisherId)
         .filter((id) => id !== selfId),
     );
-    let fresh: string | null = null;
-    for (const id of ids) if (!prevShareIdsRef.current.has(id)) fresh = id;
+    // Sort so that when several shares start in the same render the
+    // auto-promoted one is the same on every client.
+    const fresh =
+      [...ids].filter((id) => !prevShareIdsRef.current.has(id)).sort()[0] ?? null;
     prevShareIdsRef.current = ids;
     if (fresh && !stage) setStage({ kind: 'screen', id: fresh });
   }, [shares, selfId, stage]);

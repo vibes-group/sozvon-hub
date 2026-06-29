@@ -316,8 +316,17 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const visible = useMemo<VisibleMessage[]>(() => {
-    return messages.map((msg, i) => {
-      const prev = i > 0 ? messages[i - 1] : null;
+    // Order by the server-assigned ULID `id` — it's lexicographically sortable
+    // by server-receive time, so every client shows the same order regardless of
+    // WS arrival jitter. Pending optimistic messages have no server id yet (their
+    // id is a client UUID), so keep them at the bottom as the just-sent tail.
+    const ordered = [...messages].sort((a, b) => {
+      if (Boolean(a.pending) !== Boolean(b.pending)) return a.pending ? 1 : -1;
+      if (a.pending) return 0; // both pending → stable sort keeps send order
+      return a.id.localeCompare(b.id);
+    });
+    return ordered.map((msg, i) => {
+      const prev = i > 0 ? ordered[i - 1] : null;
       const sameSender =
         prev !== null &&
         (prev.senderClientId !== undefined && msg.senderClientId !== undefined
