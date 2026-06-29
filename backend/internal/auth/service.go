@@ -253,9 +253,9 @@ func (s *Service) CreateInvite(ctx context.Context, inviterUserID string, grantC
 		grantInt = 1
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		insert into account_invites (id, token_hash, token, invited_by, expires_at, grant_can_invite, admin_note)
-		values (?, ?, ?, ?, ?, ?, ?)
-	`, inviteID, tokenHash[:], token, invitedBy, expiresAt, grantInt, note); err != nil {
+		insert into account_invites (id, token_hash, invited_by, expires_at, grant_can_invite, admin_note)
+		values (?, ?, ?, ?, ?, ?)
+	`, inviteID, tokenHash[:], invitedBy, expiresAt, grantInt, note); err != nil {
 		return Invite{}, fmt.Errorf("insert invite: %w", err)
 	}
 
