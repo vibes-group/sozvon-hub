@@ -448,7 +448,8 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
       }
       if (name === 'NotAllowedError' || name === 'AbortError') {
         getStore().setStatus(
-          'Доступ к камере не разрешён. Разрешите камеру для сайта в настройках браузера.',
+          'Доступ к камере не разрешён. На Android проверьте системный «Доступ к камере» ' +
+            '(шторка / Настройки → Конфиденциальность), разрешение камеры для браузера и для сайта.',
           true,
           true,
         );
