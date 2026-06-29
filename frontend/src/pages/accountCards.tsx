@@ -155,16 +155,18 @@ function AdminUserRow({
         >
           {busy === 'note' ? '…' : 'Сохранить'}
         </button>
-        {!u.isAdmin && (
+      </div>
+      {!u.isAdmin && (
+        <div className="flex justify-end border-t border-line pt-2.5">
           <button
             className="btn btn-danger btn-mini shrink-0"
             disabled={busy === 'delete'}
             onClick={handleDelete}
           >
-            {busy === 'delete' ? '…' : confirmDelete ? 'Точно?' : 'Удалить'}
+            {busy === 'delete' ? '…' : confirmDelete ? 'Точно? Удалить' : 'Удалить пользователя'}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </li>
   );
 }
