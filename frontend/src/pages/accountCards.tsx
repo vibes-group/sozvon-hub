@@ -199,30 +199,53 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
           </button>
         </div>
       </label>
-      <label className="grid gap-1">
+      <div className="grid gap-1">
         <span className="section-label">Логин</span>
-        <div className="flex gap-2">
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save({ username: username.trim() }, 'username', 'Логин обновлён.');
+          }}
+        >
           <input
             className="input-field mt-0 min-w-0 flex-1"
+            name="username"
             value={username}
             maxLength={64}
-            autoComplete="off"
+            autoComplete="username"
             onChange={(e) => setUsername(e.target.value)}
           />
           <button
+            type="submit"
             className="btn btn-secondary shrink-0"
             disabled={!usernameChanged || busy === 'username'}
-            onClick={() => save({ username: username.trim() }, 'username', 'Логин обновлён.')}
           >
             {busy === 'username' ? '…' : 'Сохранить'}
           </button>
-        </div>
-      </label>
+        </form>
+      </div>
 
-      <div className="grid gap-2 border-t border-line pt-4">
+      <form
+        className="grid gap-2 border-t border-line pt-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void savePassword();
+        }}
+      >
         <span className="section-label">Сменить пароль</span>
         <input
+          className="absolute h-px w-px overflow-hidden whitespace-nowrap opacity-0"
+          name="username"
+          value={username}
+          autoComplete="username"
+          readOnly
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+        <input
           className="input-field mt-0"
+          name="currentPassword"
           type="password"
           value={curPw}
           autoComplete="current-password"
@@ -232,6 +255,7 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
         <div className="flex gap-2">
           <input
             className="input-field mt-0 min-w-0 flex-1"
+            name="newPassword"
             type="password"
             value={newPw}
             autoComplete="new-password"
@@ -239,14 +263,14 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
             onChange={(e) => setNewPw(e.target.value)}
           />
           <button
+            type="submit"
             className="btn btn-secondary shrink-0"
             disabled={busy === 'password' || !curPw || newPw.length < 8}
-            onClick={savePassword}
           >
             {busy === 'password' ? '…' : 'Сменить'}
           </button>
         </div>
-      </div>
+      </form>
 
       {msg && <p className={`text-[13px] ${msg.ok ? 'text-good' : 'text-danger'}`}>{msg.text}</p>}
     </section>
