@@ -3,6 +3,7 @@ import {
   adminListUsers,
   adminUpdateUser,
   changePassword,
+  copyToClipboard,
   createInvite,
   listInvites,
   revokeInvite,
@@ -305,14 +306,9 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
 
   const copyInvite = useCallback(async (inv: Invite) => {
     const url = absUrl(inv.url);
-    if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedId(inv.id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      /* ignore */
-    }
+    if (!url || !(await copyToClipboard(url))) return;
+    setCopiedId(inv.id);
+    setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
   return (

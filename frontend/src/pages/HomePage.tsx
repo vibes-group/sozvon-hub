@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { Check, LogOut, Pencil, Settings, Share2, X } from 'lucide-react';
+import { Check, Copy, LogOut, Pencil, Settings, Share2, X } from 'lucide-react';
 import {
+  copyRoom,
   createRoom,
   fetchMe,
   fetchRoom,
@@ -312,7 +313,6 @@ function RoomsCard() {
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<RoomCreated | null>(null);
   const [newName, setNewName] = useState('');
-  const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(() => {
@@ -351,15 +351,6 @@ function RoomsCard() {
     }
   }, [busy, refresh, newName]);
 
-  const share = useCallback(async (key: string, slug: string) => {
-    const result = await shareRoom(slug);
-    if (result === 'fail') return;
-    // On desktop this means "copied"; on mobile the native sheet already gave
-    // its own feedback, but the tick is harmless either way.
-    setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
-  }, []);
-
   const onRenamed = useCallback((slug: string, name: string) => {
     setRooms((prev) => prev.map((r) => (r.slug === slug ? { ...r, name } : r)));
   }, []);
@@ -395,9 +386,7 @@ function RoomsCard() {
               value={`${window.location.origin}${fresh.url}`}
               onFocus={(e) => e.target.select()}
             />
-            <button className="btn btn-secondary shrink-0" onClick={() => share('fresh', fresh.slug)}>
-              {copied === 'fresh' ? 'Скопировано' : 'Поделиться'}
-            </button>
+            <RoomShareButtons slug={fresh.slug} />
           </div>
           {fresh.expiresAt && (
             <p className="text-[12px] text-muted-2">
@@ -416,14 +405,7 @@ function RoomsCard() {
           <span className="section-label">Мои комнаты</span>
           <ul className="grid gap-2">
             {rooms.map((r) => (
-              <CreatedRoomRow
-                key={r.slug}
-                room={r}
-                now={now}
-                copied={copied}
-                onShare={share}
-                onRenamed={onRenamed}
-              />
+              <CreatedRoomRow key={r.slug} room={r} now={now} onRenamed={onRenamed} />
             ))}
           </ul>
         </div>
@@ -434,7 +416,7 @@ function RoomsCard() {
           <span className="section-label">Куда заходил</span>
           <ul className="grid gap-2">
             {joined.map((r) => (
-              <JoinedRoomRow key={r.slug} room={r} now={now} copied={copied} onShare={share} />
+              <JoinedRoomRow key={r.slug} room={r} now={now} />
             ))}
           </ul>
         </div>
@@ -460,16 +442,53 @@ function RoomStatusTail({ room, now }: { room: RoomSummary; now: number }) {
 type RoomRowProps = {
   room: RoomSummary;
   now: number;
-  copied: string | null;
-  onShare: (key: string, slug: string) => void;
 };
+
+// "Скопировать" + "Поделиться" pair shown next to a room link. Each instance
+// owns its own 2 s confirmation tick, so buttons never interfere.
+function RoomShareButtons({ slug }: { slug: string }) {
+  const [done, setDone] = useState<'copy' | 'share' | null>(null);
+
+  const flash = (action: 'copy' | 'share') => {
+    setDone(action);
+    setTimeout(() => setDone(null), 2000);
+  };
+
+  const copy = async () => {
+    if (await copyRoom(slug)) flash('copy');
+  };
+  const share = async () => {
+    // On desktop shareRoom copies; on mobile the native sheet gives its own
+    // feedback, but the tick is harmless either way.
+    if ((await shareRoom(slug)) !== 'fail') flash('share');
+  };
+
+  return (
+    <>
+      <button
+        className="btn btn-secondary btn-mini shrink-0"
+        onClick={copy}
+        title="Скопировать ссылку"
+        aria-label="Скопировать ссылку"
+      >
+        {done === 'copy' ? <Check size={15} /> : <Copy size={15} />}
+      </button>
+      <button
+        className="btn btn-secondary btn-mini shrink-0"
+        onClick={share}
+        title="Поделиться ссылкой"
+        aria-label="Поделиться ссылкой"
+      >
+        {done === 'share' ? <Check size={15} /> : <Share2 size={15} />}
+      </button>
+    </>
+  );
+}
 
 // A room the caller created: name is renamable, plus share.
 function CreatedRoomRow({
   room,
   now,
-  copied,
-  onShare,
   onRenamed,
 }: RoomRowProps & { onRenamed: (slug: string, name: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -549,21 +568,14 @@ function CreatedRoomRow({
         >
           <Pencil size={15} />
         </button>
-        <button
-          className="btn btn-secondary btn-mini"
-          onClick={() => onShare(room.slug, room.slug)}
-          title="Поделиться ссылкой"
-          aria-label="Поделиться ссылкой"
-        >
-          {copied === room.slug ? <Check size={15} /> : <Share2 size={15} />}
-        </button>
+        <RoomShareButtons slug={room.slug} />
       </div>
     </li>
   );
 }
 
 // A room the caller joined but does not own: read-only name, plus share.
-function JoinedRoomRow({ room, now, copied, onShare }: RoomRowProps) {
+function JoinedRoomRow({ room, now }: RoomRowProps) {
   return (
     <li className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
       <span className="min-w-0 truncate text-[13px] text-muted">
@@ -572,14 +584,9 @@ function JoinedRoomRow({ room, now, copied, onShare }: RoomRowProps) {
         </a>
         <RoomStatusTail room={room} now={now} />
       </span>
-      <button
-        className="btn btn-secondary btn-mini shrink-0"
-        onClick={() => onShare(room.slug, room.slug)}
-        title="Поделиться ссылкой"
-        aria-label="Поделиться ссылкой"
-      >
-        {copied === room.slug ? <Check size={15} /> : <Share2 size={15} />}
-      </button>
+      <div className="flex items-center gap-2 shrink-0">
+        <RoomShareButtons slug={room.slug} />
+      </div>
     </li>
   );
 }

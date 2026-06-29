@@ -221,6 +221,16 @@ export function roomUrl(slug: string): string {
   return `${window.location.origin}/r/${slug}`;
 }
 
+// Write text to the clipboard, returning false if it's unavailable.
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Share a room link in one click. On mobile (where the Web Share API exists)
 // this opens the native share sheet; on desktop it falls back to copying the
 // link to the clipboard. A user-cancelled share sheet is not an error.
@@ -236,12 +246,14 @@ export async function shareRoom(slug: string): Promise<'shared' | 'copied' | 'fa
       // Otherwise fall through to clipboard.
     }
   }
-  try {
-    await navigator.clipboard.writeText(url);
-    return 'copied';
-  } catch {
-    return 'fail';
-  }
+  return (await copyToClipboard(url)) ? 'copied' : 'fail';
+}
+
+// Copy a room link to the clipboard. Unlike shareRoom this never opens the
+// native share sheet — it always copies. Returns false if the clipboard is
+// unavailable.
+export async function copyRoom(slug: string): Promise<boolean> {
+  return copyToClipboard(roomUrl(slug));
 }
 
 export async function adminListUsers(): Promise<AdminUserView[]> {
