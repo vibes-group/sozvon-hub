@@ -105,6 +105,7 @@ export type SFUClient = {
   resumeScreenShare(token: string): Promise<void>;
   startCamera(stream: MediaStream): Promise<void>;
   stopCamera(): void;
+  replaceCameraTrack(stream: MediaStream): Promise<void>;
   subscribeCamera(publisherId: string): void;
   unsubscribeCamera(publisherId: string): void;
   isPublishingCamera(): boolean;
@@ -164,6 +165,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   // Camera publisher/subscriber state — mirrors the screen-share machinery.
   let cameraPubPC: RTCPeerConnection | null = null;
   let cameraPubStream: MediaStream | null = null;
+  let cameraVideoSender: RTCRtpSender | null = null;
   let cameraPubStopped = false;
   const cameraSubs = new Map<string, RTCPeerConnection>();
 
@@ -1040,6 +1042,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     on.onCameraSelfStarted({ stream });
 
     const videoSender = newPC.addTrack(videoTrack, stream);
+    cameraVideoSender = videoSender;
 
     const caps = RTCRtpSender.getCapabilities('video');
     const tx = newPC.getTransceivers().find((t) => t.sender === videoSender);
@@ -1105,7 +1108,36 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     }
     cameraPubPC = null;
     cameraPubStream = null;
+    cameraVideoSender = null;
     on.onCameraSelfStopped();
+  }
+
+  // Swap the published camera to a new capture (device change) without a
+  // renegotiation: replaceTrack keeps the same VP8 sender, so the SFU and
+  // subscribers see no interruption. The self-preview is refreshed via
+  // onCameraSelfStarted and the old capture's tracks are stopped.
+  async function replaceCameraTrack(stream: MediaStream): Promise<void> {
+    if (!cameraPubPC || cameraPubStopped || !cameraVideoSender) {
+      throw new Error('sfu-client: not publishing camera');
+    }
+    const newTrack = stream.getVideoTracks()[0];
+    if (!newTrack) {
+      throw new Error('sfu-client: camera stream has no video track');
+    }
+    newTrack.contentHint = 'motion';
+    newTrack.addEventListener('ended', () => {
+      if (!cameraPubStopped) stopCamera();
+    });
+    await cameraVideoSender.replaceTrack(newTrack);
+    const old = cameraPubStream;
+    cameraPubStream = stream;
+    on.onCameraSelfStarted({ stream });
+    // stop() does not fire 'ended', so the old track's listener won't recurse.
+    try {
+      old?.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
   }
 
   function isPublishingCamera(): boolean {
@@ -1225,6 +1257,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     resumeScreenShare,
     startCamera,
     stopCamera,
+    replaceCameraTrack,
     subscribeCamera,
     unsubscribeCamera,
     isPublishingCamera,

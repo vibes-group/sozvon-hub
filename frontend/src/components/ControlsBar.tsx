@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react';
 import {
   Mic,
   MicOff,
   Video,
   VideoOff,
+  SwitchCamera,
   ScreenShare,
   ScreenShareOff,
   Headphones,
@@ -14,12 +16,47 @@ import { useScreenShareStore } from '../store/useScreenShareStore';
 type Props = {
   onToggleMic: () => void;
   onToggleCamera: () => void;
+  onFlipCamera?: () => void;
   onToggleScreenShare: () => void;
   onToggleDeafen: () => void;
   onLeave: () => void;
   // Hidden on devices without getDisplayMedia (mobile browsers).
   canScreenShare?: boolean;
 };
+
+// Number of real cameras available. ≥2 means a front/back pair (phones) where a
+// quick flip makes sense; device ids only populate once camera permission is
+// granted, so we re-count when the camera turns on.
+function useCameraCount(cameraOn: boolean): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      navigator.mediaDevices
+        ?.enumerateDevices?.()
+        .then((all) => {
+          if (cancelled) return;
+          setCount(
+            all.filter(
+              (d) =>
+                d.kind === 'videoinput' &&
+                d.deviceId &&
+                d.deviceId !== 'default' &&
+                d.deviceId !== 'communications',
+            ).length,
+          );
+        })
+        .catch(() => {});
+    };
+    refresh();
+    navigator.mediaDevices?.addEventListener('devicechange', refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
+    };
+  }, [cameraOn]);
+  return count;
+}
 
 type CtrlProps = {
   label: string;
@@ -49,9 +86,59 @@ function Ctrl({ label, active, danger, onClick, children }: CtrlProps) {
   );
 }
 
+// Camera control. With a single camera (or while off) it's a plain toggle; with
+// the camera on and a front/back pair available it splits into two: the main
+// area toggles the camera, the attached strip flips to the next camera.
+function CameraControl({
+  cameraOn,
+  canFlip,
+  onToggle,
+  onFlip,
+}: {
+  cameraOn: boolean;
+  canFlip: boolean;
+  onToggle: () => void;
+  onFlip: () => void;
+}) {
+  if (!cameraOn || !canFlip) {
+    return (
+      <Ctrl
+        label={cameraOn ? 'Выключить камеру' : 'Включить камеру'}
+        active={cameraOn}
+        onClick={onToggle}
+      >
+        {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
+      </Ctrl>
+    );
+  }
+  return (
+    <div className="flex h-12 border border-accent bg-[rgba(75,226,119,0.1)] text-accent">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label="Выключить камеру"
+        title="Выключить камеру"
+        className="grid w-10 place-items-center transition-colors duration-150 active:translate-y-px hover:bg-[rgba(75,226,119,0.18)]"
+      >
+        <Video size={20} />
+      </button>
+      <button
+        type="button"
+        onClick={onFlip}
+        aria-label="Сменить камеру"
+        title="Сменить камеру"
+        className="grid w-9 place-items-center border-l border-accent/40 transition-colors duration-150 active:translate-y-px hover:bg-[rgba(75,226,119,0.18)]"
+      >
+        <SwitchCamera size={18} />
+      </button>
+    </div>
+  );
+}
+
 export function ControlsBar({
   onToggleMic,
   onToggleCamera,
+  onFlipCamera,
   onToggleScreenShare,
   onToggleDeafen,
   onLeave,
@@ -61,12 +148,16 @@ export function ControlsBar({
   const deafened = useStore((s) => s.deafened);
   const cameraOn = useStore((s) => s.cameraOn);
   const sharing = useScreenShareStore((s) => s.myStatus === 'publishing' || s.myStatus === 'starting');
+  const canFlip = useCameraCount(cameraOn) >= 2 && !!onFlipCamera;
 
   return (
     <div className="flex items-center justify-center gap-3 flex-wrap">
-      <Ctrl label={cameraOn ? 'Выключить камеру' : 'Включить камеру'} active={cameraOn} onClick={onToggleCamera}>
-        {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
-      </Ctrl>
+      <CameraControl
+        cameraOn={cameraOn}
+        canFlip={canFlip}
+        onToggle={onToggleCamera}
+        onFlip={() => onFlipCamera?.()}
+      />
       {canScreenShare && (
         <Ctrl
           label={sharing ? 'Остановить показ экрана' : 'Показать экран'}

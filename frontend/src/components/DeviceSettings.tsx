@@ -8,6 +8,7 @@ import { Toggle } from './Toggle';
 type Props = {
   onEngineSelect: (engine: EngineKind) => void;
   onMicDeviceSelect: (deviceId: string | null) => void;
+  onCamDeviceSelect: (deviceId: string | null) => void;
   onSendVolumeChange: (v: number) => void;
   onOutputVolumeChange: (v: number) => void;
   onReset: () => void;
@@ -89,6 +90,7 @@ function Select({
 export function DeviceSettings({
   onEngineSelect,
   onMicDeviceSelect,
+  onCamDeviceSelect,
   onSendVolumeChange,
   onOutputVolumeChange,
   onReset,
@@ -98,7 +100,6 @@ export function DeviceSettings({
   const outputVolume = useStore((s) => s.outputVolume);
   const micDeviceId = useStore((s) => s.micDeviceId);
   const camDeviceId = useStore((s) => s.camDeviceId);
-  const setCamDeviceId = useStore((s) => s.setCamDeviceId);
 
   // Remember the last denoiser variant so flipping the switch off and on again
   // restores the chosen algorithm instead of resetting to a default.
@@ -196,7 +197,7 @@ export function DeviceSettings({
         <Select
           value={camDeviceId ?? ''}
           ariaLabel="Камера"
-          onChange={(v) => setCamDeviceId(v || null)}
+          onChange={(v) => onCamDeviceSelect(v || null)}
         >
           <option value="">Системная по умолчанию</option>
           {cams.map((d) => (

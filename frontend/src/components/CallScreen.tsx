@@ -210,6 +210,53 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
     [session],
   );
 
+  const handleCamDeviceSelect = useCallback(
+    async (deviceId: string | null) => {
+      const s = useStore.getState();
+      if (deviceId === s.camDeviceId) return;
+      s.setCamDeviceId(deviceId);
+      // Only swap the live track when the camera is actually on; otherwise the
+      // new device applies the next time it's turned on.
+      if (s.joinState !== 'joined' || !s.cameraOn) return;
+      s.setStatus('Переключаю камеру…');
+      try {
+        await session.switchCamDevice();
+        useStore.getState().setStatus('Камера переключена.', false, true);
+      } catch (err) {
+        useStore
+          .getState()
+          .setStatus(
+            `Не удалось переключить камеру: ${err instanceof Error ? err.message : String(err)}`,
+            true,
+            true,
+          );
+      }
+    },
+    [session],
+  );
+
+  // Quick camera flip (mobile): cycle to the next video device. Reuses the
+  // device-select path, which live-swaps the published track when the camera
+  // is on.
+  const handleFlipCamera = useCallback(async () => {
+    try {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
+        (d) =>
+          d.kind === 'videoinput' &&
+          d.deviceId &&
+          d.deviceId !== 'default' &&
+          d.deviceId !== 'communications',
+      );
+      if (cams.length < 2) return;
+      const cur = useStore.getState().camDeviceId;
+      const idx = cams.findIndex((d) => d.deviceId === cur);
+      const next = cams[(idx + 1) % cams.length];
+      if (next.deviceId !== cur) await handleCamDeviceSelect(next.deviceId);
+    } catch {
+      /* ignore — enumeration can fail before permission is granted */
+    }
+  }, [handleCamDeviceSelect]);
+
   const handleSendVolumeChange = useCallback(
     (v: number) => {
       useStore.getState().setSendVolume(v);
@@ -232,11 +279,11 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
     audio.updateSendGain();
     s.setOutputVolume(100);
     audio.applyAllRemoteGains();
-    s.setCamDeviceId(null);
     void handleEngineSelect('browser');
     void handleMicDeviceSelect(null);
+    void handleCamDeviceSelect(null);
     useStore.getState().setStatus('Настройки сброшены.', false, true);
-  }, [audio, handleEngineSelect, handleMicDeviceSelect]);
+  }, [audio, handleEngineSelect, handleMicDeviceSelect, handleCamDeviceSelect]);
 
   // Promote a feed to the stage (from a grid tile or a filmstrip swap).
   const handlePin = useCallback((target: StageTarget) => setStage(target), []);
@@ -406,6 +453,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
           <ControlsBar
             onToggleMic={handleToggleMic}
             onToggleCamera={handleToggleCamera}
+            onFlipCamera={handleFlipCamera}
             onToggleScreenShare={handleToggleScreenShare}
             onToggleDeafen={handleToggleDeafen}
             onLeave={handleLeave}
@@ -449,6 +497,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             <DeviceSettings
               onEngineSelect={handleEngineSelect}
               onMicDeviceSelect={handleMicDeviceSelect}
+              onCamDeviceSelect={handleCamDeviceSelect}
               onSendVolumeChange={handleSendVolumeChange}
               onOutputVolumeChange={handleOutputVolumeChange}
               onReset={handleReset}

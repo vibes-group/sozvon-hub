@@ -485,6 +485,16 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
     getStore().setStatus('Камера выключена', false, true);
   }, [sfu, getStore]);
 
+  // Live camera device swap: re-capture with the newly selected device and
+  // replace the published track in place. No-op when the camera is off — the
+  // new device is picked up the next time the camera is turned on.
+  const switchCamDevice = useCallback(async (): Promise<void> => {
+    const client = sfu.getClient();
+    if (!client || !client.isPublishingCamera()) return;
+    const stream = await openCameraStream();
+    await client.replaceCameraTrack(stream);
+  }, [sfu, openCameraStream]);
+
   return {
     join: handleJoin,
     leave: handleLeave,
@@ -504,6 +514,7 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
     unsubscribeScreenShare,
     startCamera,
     stopCamera,
+    switchCamDevice,
     handleChatReceive,
     handleChatDelete,
   };
