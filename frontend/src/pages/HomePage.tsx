@@ -226,7 +226,7 @@ function RecentRoomsCard() {
         {recent.map((r) => (
           <li
             key={r.slug}
-            className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
+            className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
           >
             <a
               href={`/r/${r.slug}`}
@@ -386,7 +386,7 @@ function RoomsCard() {
 
       {fresh && (
         <div className="grid gap-2 border border-accent/40 bg-bg-input p-3">
-          <span className="section-label">Новая комната «{fresh.name}»</span>
+          <span className="section-label min-w-0 break-words">Новая комната «{fresh.name}»</span>
           <div className="flex gap-2">
             <input
               className="input-field mt-0 min-w-0 flex-1"
@@ -525,7 +525,7 @@ function CreatedRoomRow({
 
   if (editing) {
     return (
-      <li className="flex items-center gap-2 border border-line bg-bg-input px-3 py-2">
+      <li className="flex min-w-0 items-center gap-2 border border-line bg-bg-input px-3 py-2">
         <input
           className="input-field mt-0 min-w-0 flex-1"
           value={draft}
@@ -557,7 +557,7 @@ function CreatedRoomRow({
   }
 
   return (
-    <li className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
+    <li className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
       <span className="min-w-0 truncate text-[13px] text-muted">
         <a href={room.url} className="text-accent underline underline-offset-2">
           {room.name || room.slug}
@@ -585,7 +585,7 @@ function CreatedRoomRow({
 // A room the caller joined but does not own: read-only name, plus share.
 function JoinedRoomRow({ room, now }: RoomRowProps) {
   return (
-    <li className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
+    <li className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2">
       <span className="min-w-0 truncate text-[13px] text-muted">
         <a href={room.url} className="text-accent underline underline-offset-2">
           {room.name || room.slug}

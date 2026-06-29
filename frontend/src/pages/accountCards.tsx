@@ -89,8 +89,8 @@ function AdminUserRow({
   }, [busy, u.canInvite, u.id, onPatch, onError]);
 
   return (
-    <li className="grid gap-2 border border-line bg-bg-input px-3 py-2.5">
-      <div className="flex items-baseline justify-between gap-2">
+    <li className="grid min-w-0 gap-2 border border-line bg-bg-input px-3 py-2.5">
+      <div className="flex min-w-0 items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-[13px]">
           <span className="font-medium text-text">{u.username}</span>
           {u.isAdmin && <span className="text-accent"> · админ</span>}
@@ -111,9 +111,9 @@ function AdminUserRow({
         Имя: <span className="text-muted">{u.name || '—'}</span> · рег: {fmtDateTime(u.createdAt)} · вход:{' '}
         {fmtDateTime(u.lastSeenAt)}
       </div>
-      <div className="flex gap-2">
+      <div className="flex min-w-0 gap-2">
         <input
-          className="input-field mt-0 flex-1"
+          className="input-field mt-0 min-w-0 flex-1"
           value={note}
           maxLength={100}
           placeholder="Никнейм (только для вас)"
@@ -185,7 +185,7 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
         <span className="section-label">Имя для звонков</span>
         <div className="flex gap-2">
           <input
-            className="input-field mt-0 flex-1"
+            className="input-field mt-0 min-w-0 flex-1"
             value={name}
             maxLength={64}
             onChange={(e) => setName(e.target.value)}
@@ -203,7 +203,7 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
         <span className="section-label">Логин</span>
         <div className="flex gap-2">
           <input
-            className="input-field mt-0 flex-1"
+            className="input-field mt-0 min-w-0 flex-1"
             value={username}
             maxLength={64}
             autoComplete="off"
@@ -231,7 +231,7 @@ export function ProfileCard({ user, onUpdated }: { user: User; onUpdated: (u: Us
         />
         <div className="flex gap-2">
           <input
-            className="input-field mt-0 flex-1"
+            className="input-field mt-0 min-w-0 flex-1"
             type="password"
             value={newPw}
             autoComplete="new-password"
@@ -332,12 +332,12 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
             />
             Сможет приглашать новых пользователей
           </label>
-          <button className="btn btn-primary justify-center" onClick={handleCreate} disabled={busy}>
+          <button className="btn btn-primary justify-center whitespace-normal" onClick={handleCreate} disabled={busy}>
             {busy ? '…' : 'Создать приглашение'}
           </button>
         </div>
       ) : (
-        <button className="btn btn-primary justify-center" onClick={handleCreate} disabled={busy}>
+        <button className="btn btn-primary justify-center whitespace-normal" onClick={handleCreate} disabled={busy}>
           {busy ? '…' : 'Создать приглашение'}
         </button>
       )}
@@ -349,7 +349,7 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
           <span className="section-label">Новая ссылка-приглашение</span>
           <div className="flex gap-2">
             <input
-              className="input-field mt-0 flex-1"
+              className="input-field mt-0 min-w-0 flex-1"
               readOnly
               value={absUrl(freshToken.url)}
               onFocus={(e) => e.target.select()}
@@ -371,9 +371,9 @@ export function InvitesCard({ isAdmin }: { isAdmin: boolean }) {
           {invites.map((inv) => (
             <li
               key={inv.id}
-              className="flex items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
+              className="flex min-w-0 items-center justify-between gap-3 border border-line bg-bg-input px-3 py-2"
             >
-              <span className="text-[13px] text-muted truncate">
+              <span className="min-w-0 truncate text-[13px] text-muted">
                 {inv.usedAt ? 'Использовано' : 'Действует'}
                 {inv.expiresAt && (
                   <span className="text-muted-2"> · до {new Date(inv.expiresAt).toLocaleDateString('ru-RU')}</span>

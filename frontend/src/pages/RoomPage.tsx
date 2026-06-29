@@ -121,7 +121,7 @@ export default function RoomPage() {
   }
 
   return (
-    <main className="min-h-dvh grid place-items-center bg-bg-0 text-body px-4">
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-bg-0 text-body px-4">
       <div className="w-full max-w-sm">
         {state.kind === 'loading' && (
           <p className="text-center text-muted-2 text-[13px] uppercase tracking-[0.14em]">
@@ -153,7 +153,7 @@ export default function RoomPage() {
           <div className="card grid gap-4">
             <div>
               <h1 className="card-title">Вход в звонок</h1>
-              <p className="mt-1 text-[12px] text-muted-2">Комната «{roomName || slug}»</p>
+              <p className="mt-1 break-words text-[12px] text-muted-2">Комната «{roomName || slug}»</p>
             </div>
             <label className="grid gap-1">
               <span className="section-label">Ваше имя</span>

@@ -26,7 +26,7 @@ export default function SettingsPage() {
   if (!me) return <Navigate to="/" replace />;
 
   return (
-    <main className="min-h-dvh bg-bg-0 text-body px-4 py-10 grid place-items-center">
+    <main className="flex min-h-dvh flex-col items-center bg-bg-0 text-body px-4 py-10">
       <div className="w-full max-w-md grid gap-4">
         <header className="flex items-center justify-between gap-3 px-1">
           <Link to="/" className="btn btn-secondary btn-mini">
