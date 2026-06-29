@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router';
+import { Link, Navigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { fetchMe, type User } from '../api';
 import { AdminUsersCard, InvitesCard, ProfileCard } from './accountCards';
 
 export default function SettingsPage() {
-  const navigate = useNavigate();
   const [me, setMe] = useState<User | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -36,14 +35,7 @@ export default function SettingsPage() {
           <h1 className="text-[13px] uppercase tracking-[0.14em] text-muted-2">Настройки</h1>
         </header>
 
-        <ProfileCard
-          user={me}
-          onUpdated={setMe}
-          onUsernameChanged={() => {
-            setMe(null);
-            navigate('/', { replace: true });
-          }}
-        />
+        <ProfileCard user={me} onUpdated={setMe} />
         {(me.canInvite || me.isAdmin) && <InvitesCard isAdmin={me.isAdmin} />}
         {me.isAdmin && <AdminUsersCard />}
       </div>
