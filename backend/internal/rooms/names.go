@@ -2,30 +2,32 @@ package rooms
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 )
 
-// Adjectives and nouns are both masculine so "{adj}-{noun}" always agrees in
-// gender — the generated name reads naturally without per-word logic.
-var nameAdjectives = []string{
-	"быстрый", "синий", "тихий", "яркий", "хитрый", "смелый", "лёгкий", "добрый",
-	"звёздный", "снежный", "ночной", "лесной", "морской", "огненный", "весёлый", "мудрый",
+// Room names evoke a place — a calm spot to gather — and use ambiance words, a
+// deliberately different theme from guest display names (which are animal
+// "personas" like "Хитрый Барсук"). So a room and a person never read alike.
+// Adjectives and nouns are both feminine so "{adj} {noun}" always agrees in
+// gender; only the adjective is capitalized, giving phrases like "Звёздная
+// гавань".
+var roomAdjectives = []string{
+	"Звёздная", "Туманная", "Янтарная", "Вечерняя", "Северная", "Дальняя",
+	"Тёплая", "Зелёная", "Светлая", "Хрустальная", "Заветная", "Облачная",
+	"Парусная", "Морская", "Песчаная", "Кедровая", "Сиреневая", "Закатная",
 }
 
-var nameNouns = []string{
-	"тигр", "сокол", "барс", "филин", "ёж", "лис", "кит", "волк",
-	"бобр", "енот", "грифон", "дельфин", "пингвин", "хорёк", "беркут", "морж",
+var roomNouns = []string{
+	"гавань", "бухта", "веранда", "студия", "мансарда", "оранжерея", "беседка",
+	"терраса", "лагуна", "опушка", "поляна", "палуба", "башня", "пристань",
+	"галерея", "мастерская", "гостиная", "аллея", "дюна", "обсерватория",
 }
 
-// generateName builds a friendly, human-readable room name like "синий-тигр-42".
-// Used when the creator leaves the name blank.
+// generateName builds a friendly room name like "Звёздная гавань". Used when
+// the creator leaves the name blank. The slug stays the unique handle, so an
+// occasional duplicate name is harmless.
 func generateName() string {
-	return fmt.Sprintf("%s-%s-%d",
-		nameAdjectives[randIndex(len(nameAdjectives))],
-		nameNouns[randIndex(len(nameNouns))],
-		randIndex(90)+10, // 10..99
-	)
+	return roomAdjectives[randIndex(len(roomAdjectives))] + " " + roomNouns[randIndex(len(roomNouns))]
 }
 
 func randIndex(n int) int {

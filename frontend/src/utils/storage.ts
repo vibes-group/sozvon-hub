@@ -62,12 +62,14 @@ export function saveDisplayName(name: string): void {
   localStorage.setItem(KEYS.displayName, name.trim());
 }
 
-// Adjectives and animals are both masculine so "{adj} {animal}" always agrees in
-// gender — keeps the generated name grammatical without per-word logic.
+// A guest name is an animal "persona" — a character trait plus an animal —
+// deliberately a different theme from room names (which are places like
+// "Звёздная гавань"), so a person and a room never read alike. Adjectives and
+// animals are both masculine so "{adj} {animal}" always agrees in gender.
 const GUEST_ADJECTIVES = [
   'Храбрый', 'Весёлый', 'Хитрый', 'Быстрый', 'Добрый', 'Смелый', 'Лохматый',
-  'Сонный', 'Бодрый', 'Рыжий', 'Тихий', 'Шумный', 'Мудрый', 'Ловкий', 'Грозный',
-  'Пушистый', 'Дерзкий', 'Важный', 'Озорной', 'Лунный',
+  'Сонный', 'Бодрый', 'Рыжий', 'Тихий', 'Шустрый', 'Мудрый', 'Ловкий', 'Грозный',
+  'Пушистый', 'Дерзкий', 'Усатый', 'Озорной', 'Отважный',
 ];
 const GUEST_ANIMALS = [
   'Барсук', 'Тигр', 'Волк', 'Ёж', 'Лис', 'Кит', 'Сокол', 'Бобр', 'Енот', 'Морж',
