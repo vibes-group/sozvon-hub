@@ -369,6 +369,15 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
           </div>
         </header>
 
+        {statusState === 'err' && statusText && (
+          <div
+            role="alert"
+            className="shrink-0 border-b border-danger bg-[rgba(248,113,113,0.12)] px-4 py-2 text-[13px] text-danger sm:hidden"
+          >
+            {statusText}
+          </div>
+        )}
+
         <div className="flex-1 min-h-0 flex">
           <section className="flex-1 min-w-0 min-h-0 overflow-hidden p-4">
             {stage ? (
