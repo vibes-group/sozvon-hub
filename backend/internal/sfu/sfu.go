@@ -103,7 +103,8 @@ type peer struct {
 	cancel context.CancelFunc
 
 	// syncMu serialises syncOnePeer for this peer; caller must not hold r.mu.
-	syncMu sync.Mutex
+	syncMu          sync.Mutex
+	syncInitialized bool // guarded by syncMu
 	// syncPending is set when syncOnePeer was skipped because the PC was
 	// mid-negotiation; the answer handler drains it once signaling settles.
 	syncPending atomic.Bool
@@ -395,7 +396,7 @@ func (r *Room) ServeWS(w http.ResponseWriter, req *http.Request) {
 			// that subscribers did not, so forwarding them would cause subscribers
 			// to misparse the extension block.
 			pkt.Extension = false
-			pkt.Extensions = nil
+			pkt.Extensions = pkt.Extensions[:0]
 
 			if err := local.WriteRTP(pkt); err != nil {
 				return

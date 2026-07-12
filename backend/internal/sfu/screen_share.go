@@ -83,8 +83,7 @@ func policyForMode(m protocol.ScreenShareMode) modePolicy {
 //	         broadcasts screen-share-ended, drops the session off peer.screen.
 //
 // Concurrency: most fields are set at start() and read-only thereafter.
-// Mutable state (subscribers, graceCancel) is guarded by mu. forwardLoop
-// snapshots subscribers under mu.RLock to avoid pion-internal lock crossover.
+// Mutable state is guarded by mu; the forward path reads a copy-on-write view.
 type ScreenShareSession struct {
 	PublisherID    string
 	SessionToken   string
@@ -119,8 +118,9 @@ type ScreenShareSession struct {
 	// fires. Cached to avoid GetTransceivers() scans on every PLI/FIR packet.
 	publisherVideoSSRC atomic.Uint32
 
-	mu          sync.RWMutex
-	subscribers map[string]*screenSubscriber // key = subscriber peer ID
+	mu             sync.RWMutex
+	subscribers    map[string]*screenSubscriber // key = subscriber peer ID
+	subscriberView atomic.Pointer[[]*screenSubscriber]
 
 	// graceCancel cancels the in-flight grace timer when the publisher
 	// reattaches via screen-share-resume. Replaced atomically each time a
@@ -239,6 +239,23 @@ func decodeMode(v uint32) protocol.ScreenShareMode {
 // concurrent reads — backed by an atomic.
 func (s *ScreenShareSession) Mode() protocol.ScreenShareMode {
 	return decodeMode(s.mode.Load())
+}
+
+// Caller must hold s.mu for writing.
+func (s *ScreenShareSession) refreshSubscriberViewLocked() {
+	subs := make([]*screenSubscriber, 0, len(s.subscribers))
+	for _, sub := range s.subscribers {
+		subs = append(subs, sub)
+	}
+	s.subscriberView.Store(&subs)
+}
+
+func (s *ScreenShareSession) subscribersSnapshot() []*screenSubscriber {
+	view := s.subscriberView.Load()
+	if view == nil {
+		return nil
+	}
+	return *view
 }
 
 // setupScreenPubPC creates the publisher PC, performs the SDP exchange, and
@@ -622,6 +639,7 @@ func (r *Room) removeScreenSubscriber(sub *peer, publisherID, reason string) {
 		session.mu.Lock()
 		if _, ok := session.subscribers[sub.id]; ok {
 			delete(session.subscribers, sub.id)
+			session.refreshSubscriberViewLocked()
 			wentIdle = len(session.subscribers) == 0
 		}
 		session.mu.Unlock()
@@ -661,6 +679,7 @@ func (r *Room) endScreenShareSession(session *ScreenShareSession, reason string)
 		subs = append(subs, s)
 	}
 	session.subscribers = nil
+	session.refreshSubscriberViewLocked()
 	graceCancel := session.graceCancel
 	session.graceCancel = nil
 	session.mu.Unlock()

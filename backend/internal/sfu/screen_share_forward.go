@@ -22,9 +22,8 @@ import (
 // PC closes (graceful or failure), Read returns io.EOF and the loop exits.
 // We don't select on session.ctx — pion does not surface ctx through Read.
 //
-// The subscriber slice is snapshotted under s.mu.RLock to keep pion-internal
-// locks in WriteRTP from crossing s.mu, which would deadlock on teardown
-// because OnConnectionStateChange acquires s.mu while holding pc internals.
+// The copy-on-write subscriber view keeps pion-internal WriteRTP locks from
+// crossing s.mu, which would deadlock with connection-state callbacks.
 func (s *ScreenShareSession) forwardVideo(remote *webrtc.TrackRemote) {
 	for {
 		pkt, _, err := remote.ReadRTP()
@@ -40,14 +39,7 @@ func (s *ScreenShareSession) forwardVideo(remote *webrtc.TrackRemote) {
 			desc = nil
 		}
 
-		s.mu.RLock()
-		subs := make([]*screenSubscriber, 0, len(s.subscribers))
-		for _, sub := range s.subscribers {
-			subs = append(subs, sub)
-		}
-		s.mu.RUnlock()
-
-		for _, sub := range subs {
+		for _, sub := range s.subscribersSnapshot() {
 			sub.maybeForward(pkt, desc, s.PublisherID)
 		}
 	}

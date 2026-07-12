@@ -30,15 +30,8 @@ func (r *Room) runAutoDowngradeTick(session *ScreenShareSession, now time.Time) 
 		return
 	}
 	policy := policyForMode(session.Mode())
-	session.mu.RLock()
-	subs := make([]*screenSubscriber, 0, len(session.subscribers))
-	for _, s := range session.subscribers {
-		subs = append(subs, s)
-	}
-	session.mu.RUnlock()
-
 	anyChange := false
-	for _, sub := range subs {
+	for _, sub := range session.subscribersSnapshot() {
 		if evalAutoDowngrade(sub, now, session.PublisherID, policy) {
 			anyChange = true
 		}

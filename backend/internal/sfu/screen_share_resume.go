@@ -99,6 +99,7 @@ func (r *Room) claimScreenShareSession(p *peer, token string) (
 		staleSubs = append(staleSubs, s)
 	}
 	session.subscribers = make(map[string]*screenSubscriber)
+	session.refreshSubscriberViewLocked()
 	session.mu.Unlock()
 
 	p.screenSession = session

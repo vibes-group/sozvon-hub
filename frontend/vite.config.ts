@@ -25,7 +25,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: null,
-        // RNNoise vendor (~4.8 MB each) is loaded on demand via
+        // The RNNoise worklet (~4.8 MB) is loaded on demand via
         // AudioWorklet.addModule — never precache it into the SW.
         globIgnores: ["**/vendor/rnnoise/**"],
       },

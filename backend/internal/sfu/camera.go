@@ -23,9 +23,8 @@ import (
 // sequence number so wire loss, not deliberate drops, is what surfaces as gaps)
 // and relies on GCC/TWCC for bitrate control.
 //
-// Concurrency mirrors ScreenShareSession: fields set at setup are read-only
-// thereafter; subscribers is guarded by mu and snapshotted under RLock on the
-// forward path to avoid pion-internal lock crossover.
+// Concurrency mirrors ScreenShareSession: fields set at setup are read-only;
+// the forward path reads a copy-on-write subscriber view.
 type CameraSession struct {
 	PublisherID string
 
@@ -40,8 +39,9 @@ type CameraSession struct {
 	// set once in OnTrack. Used to retarget forwarded PLI/FIR.
 	publisherVideoSSRC atomic.Uint32
 
-	mu          sync.RWMutex
-	subscribers map[string]*cameraSubscriber // key = subscriber peer ID
+	mu             sync.RWMutex
+	subscribers    map[string]*cameraSubscriber // key = subscriber peer ID
+	subscriberView atomic.Pointer[[]*cameraSubscriber]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -266,6 +266,7 @@ func (r *Room) endCameraSession(session *CameraSession, reason string) {
 		subs = append(subs, s)
 	}
 	session.subscribers = nil
+	session.refreshSubscriberViewLocked()
 	session.mu.Unlock()
 
 	_ = session.publisherPC.Close()
@@ -359,6 +360,7 @@ func (r *Room) handleCameraSubscribe(sub *peer, data protocol.CameraSubscribeDat
 		return
 	}
 	session.subscribers[sub.id] = subEntry
+	session.refreshSubscriberViewLocked()
 	session.mu.Unlock()
 
 	r.mu.Lock()
@@ -472,7 +474,10 @@ func (r *Room) removeCameraSubscriber(sub *peer, publisherID, reason string) {
 	}
 	if session != nil {
 		session.mu.Lock()
-		delete(session.subscribers, sub.id)
+		if _, ok := session.subscribers[sub.id]; ok {
+			delete(session.subscribers, sub.id)
+			session.refreshSubscriberViewLocked()
+		}
 		session.mu.Unlock()
 	}
 	log.Printf("sfu: camera unsubscribe (%s→%s) %s", sub.id, publisherID, reason)
@@ -491,17 +496,27 @@ func (s *CameraSession) forwardVideo(remote *webrtc.TrackRemote) {
 			return
 		}
 
-		s.mu.RLock()
-		subs := make([]*cameraSubscriber, 0, len(s.subscribers))
-		for _, sub := range s.subscribers {
-			subs = append(subs, sub)
-		}
-		s.mu.RUnlock()
-
-		for _, sub := range subs {
+		for _, sub := range s.subscribersSnapshot() {
 			sub.forward(pkt, s.PublisherID)
 		}
 	}
+}
+
+// Caller must hold s.mu for writing.
+func (s *CameraSession) refreshSubscriberViewLocked() {
+	subs := make([]*cameraSubscriber, 0, len(s.subscribers))
+	for _, sub := range s.subscribers {
+		subs = append(subs, sub)
+	}
+	s.subscriberView.Store(&subs)
+}
+
+func (s *CameraSession) subscribersSnapshot() []*cameraSubscriber {
+	view := s.subscriberView.Load()
+	if view == nil {
+		return nil
+	}
+	return *view
 }
 
 // requestKeyframe sends a PLI to the publisher so the next packets carry an
