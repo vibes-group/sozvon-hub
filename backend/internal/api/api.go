@@ -55,6 +55,14 @@ type Deps struct {
 	TrustedProxies []netip.Prefix
 }
 
+// InternalRoutes builds the /internal/* mux, kept off the public Routes so it
+// is only ever served on a separate, unproxied listener (see main.go).
+func InternalRoutes(hasActiveCall func() bool) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/call-status", callStatus(hasActiveCall))
+	return mux
+}
+
 // Routes registers every HTTP route on a fresh mux and returns the handler,
 // wrapped in a per-IP rate-limit backstop over the /api surface.
 func Routes(d Deps, webHandler http.Handler) http.Handler {
@@ -66,8 +74,6 @@ func Routes(d Deps, webHandler http.Handler) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("GET /internal/call-status", callStatus(d.Rooms.HasActiveCall))
-
 	mux.HandleFunc("GET /api/auth/me", d.authMe)
 	mux.HandleFunc("POST /api/auth/register", limit(authLimiter, d.TrustedProxies, d.authRegister))
 	mux.HandleFunc("POST /api/auth/login", limit(authLimiter, d.TrustedProxies, d.authLogin))

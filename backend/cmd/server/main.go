@@ -28,6 +28,11 @@ import (
 	"sozvon-hub/backend/migrations"
 )
 
+// Internal endpoints get their own listener so the public :8080 surface can
+// never serve /internal/* — private by construction, no Caddy rule to forget.
+// Bound on all interfaces (not localhost) so sibling containers can reach it.
+const internalAddr = ":8081"
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -164,6 +169,17 @@ func main() {
 		}
 	}()
 
+	internalServer := &http.Server{
+		Addr:              internalAddr,
+		Handler:           api.InternalRoutes(roomManager.HasActiveCall),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		if err := internalServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			srvErr <- err
+		}
+	}()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
@@ -178,6 +194,9 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: http: %v", err)
+	}
+	if err := internalServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: internal http: %v", err)
 	}
 	roomManager.Close()
 	if turnServer != nil {
