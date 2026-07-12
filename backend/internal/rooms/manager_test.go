@@ -338,6 +338,20 @@ func TestReconnectClearsEmptyCountdown(t *testing.T) {
 	}
 }
 
+func TestHasActiveCall(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	if m.HasActiveCall() {
+		t.Fatal("empty manager reported an active call")
+	}
+	m.mu.Lock()
+	m.live["idle"] = &liveRoom{peers: map[string]struct{}{}}
+	m.live["active"] = &liveRoom{peers: map[string]struct{}{"peer": {}}}
+	m.mu.Unlock()
+	if !m.HasActiveCall() {
+		t.Fatal("connected peer was not reported as an active call")
+	}
+}
+
 func setStatus(t *testing.T, database *sql.DB, slug, status string) {
 	t.Helper()
 	if _, err := database.ExecContext(context.Background(),

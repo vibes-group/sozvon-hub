@@ -171,6 +171,17 @@ func (m *Manager) liveParticipants(slug string) int {
 	return 0
 }
 
+func (m *Manager) HasActiveCall() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, room := range m.live {
+		if len(room.peers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // closesAt turns a room's empty_since into the time its grace period lapses
 // (empty_since + grace). It returns "" when the room is occupied (empty_since
 // null) or the stored value is unparseable.

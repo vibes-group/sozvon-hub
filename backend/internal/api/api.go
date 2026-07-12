@@ -66,6 +66,7 @@ func Routes(d Deps, webHandler http.Handler) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /internal/call-status", callStatus(d.Rooms.HasActiveCall))
 
 	mux.HandleFunc("GET /api/auth/me", d.authMe)
 	mux.HandleFunc("POST /api/auth/register", limit(authLimiter, d.TrustedProxies, d.authRegister))
@@ -98,6 +99,17 @@ func Routes(d Deps, webHandler http.Handler) http.Handler {
 
 	globalLimiter := ratelimit.New(ratelimit.Config{Rate: globalRate, Burst: globalBurst, TTL: rateLimitTTL, MaxKeys: rateLimitKeys})
 	return apiRateLimit(globalLimiter, d.TrustedProxies, mux)
+}
+
+func callStatus(active func() bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if active() {
+			_, _ = w.Write([]byte("active\n"))
+			return
+		}
+		_, _ = w.Write([]byte("idle\n"))
+	}
 }
 
 // limit wraps a handler with a per-IP token bucket, replying 429 (+ Retry-After)
