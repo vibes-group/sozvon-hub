@@ -1,5 +1,8 @@
 # sozvon-hub
 
+[![Build](https://github.com/vibes-group/sozvon-hub/actions/workflows/build.yml/badge.svg)](https://github.com/vibes-group/sozvon-hub/actions/workflows/build.yml)
+[![License](https://img.shields.io/github/license/vibes-group/sozvon-hub)](LICENSE)
+
 Видеозвонки по одноразовой ссылке. Self-hosted: один сервер со встроенными SFU и TURN, без внешних медиасерверов и зависимостей.
 
 ## Возможности
