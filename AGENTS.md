@@ -25,7 +25,7 @@ Repository is **public**. Every commit is visible.
 
 - Quick video calls, Jitsi-like. Pion WebRTC SFU embedded in the Go process,
   JSON-over-WebSocket signaling. Audio (Opus + RNNoise), camera video, screen
-  share. **No E2EE** — media transits the SFU in the clear.
+  share.
 - Accounts are invite-only (register via a link from an existing user). Only
   registered users create rooms; anyone with a room link can join as a guest.
 - Rooms are ephemeral one-time links.
