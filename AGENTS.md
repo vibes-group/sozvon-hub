@@ -44,4 +44,3 @@ on startup. Secrets only via env, never as flags, never logged.
 ## Git
 
 - Conventional commits (`feat:`, `fix:`, `chore:`, `refactor:`).
-- No `--amend` on published commits, no force-push to `master`.
