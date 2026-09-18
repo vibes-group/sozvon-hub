@@ -74,8 +74,10 @@ type Manager struct {
 // manager can detect when the room empties. The empty/teardown countdown itself
 // lives in the rooms.empty_since column, not here, so it survives a restart.
 type liveRoom struct {
-	room  liveSFU
-	peers map[string]struct{}
+	room liveSFU
+	// Maps a connected peer's id to whether it is chat-only. Chat-only peers keep the
+	// room occupied like any other, but never make it a call.
+	peers map[string]bool
 }
 
 func NewManager(database *sql.DB, cfg Config) *Manager {
@@ -171,12 +173,25 @@ func (m *Manager) liveParticipants(slug string) int {
 	return 0
 }
 
+// HasActiveCall reports whether any room is holding a conversation, which is what
+// /internal/call-status answers and what a deploy waits out.
+//
+// Chat-only peers are not counted: they hold no PeerConnection, so they neither send
+// nor hear audio, and a room of them has nothing to interrupt however full it is. One
+// peer alone is not a call either — there is no one on the other side.
 func (m *Manager) HasActiveCall() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, room := range m.live {
-		if len(room.peers) > 0 {
-			return true
+		audible := 0
+		for _, chatOnly := range room.peers {
+			if chatOnly {
+				continue
+			}
+			audible++
+			if audible == 2 {
+				return true
+			}
 		}
 	}
 	return false
@@ -378,7 +393,7 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 		AppHostname:  m.cfg.AppHostname,
 		RoomID:       slug,
 		FileStore:    m.cfg.FileStore,
-		OnPeerJoined: func(p protocol.PeerInfo) { m.peerJoined(slug, p.ID) },
+		OnPeerJoined: func(p protocol.PeerInfo) { m.peerJoined(slug, p.ID, p.ChatOnly) },
 		OnPeerLeft:   func(id string) { m.peerLeft(slug, id) },
 	})
 	if err != nil {
@@ -393,7 +408,7 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 		m.markOccupied(slug)
 		return lr, nil
 	}
-	lr := &liveRoom{room: room, peers: make(map[string]struct{})}
+	lr := &liveRoom{room: room, peers: make(map[string]bool)}
 	m.live[slug] = lr
 	m.mu.Unlock()
 
@@ -402,10 +417,10 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 	return lr, nil
 }
 
-func (m *Manager) peerJoined(slug, id string) {
+func (m *Manager) peerJoined(slug, id string, chatOnly bool) {
 	m.mu.Lock()
 	if lr, ok := m.live[slug]; ok {
-		lr.peers[id] = struct{}{}
+		lr.peers[id] = chatOnly
 	}
 	m.mu.Unlock()
 }

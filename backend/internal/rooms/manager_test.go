@@ -246,9 +246,9 @@ func seedLiveRoom(t *testing.T, m *Manager, peers ...string) (string, *stubRoom)
 	}
 	setStatus(t, m.db, info.Slug, "active")
 	room := &stubRoom{}
-	p := map[string]struct{}{}
+	p := map[string]bool{}
 	for _, id := range peers {
-		p[id] = struct{}{}
+		p[id] = false
 	}
 	m.mu.Lock()
 	m.live[info.Slug] = &liveRoom{room: room, peers: p}
@@ -343,12 +343,26 @@ func TestHasActiveCall(t *testing.T) {
 	if m.HasActiveCall() {
 		t.Fatal("empty manager reported an active call")
 	}
-	m.mu.Lock()
-	m.live["idle"] = &liveRoom{peers: map[string]struct{}{}}
-	m.live["active"] = &liveRoom{peers: map[string]struct{}{"peer": {}}}
-	m.mu.Unlock()
-	if !m.HasActiveCall() {
-		t.Fatal("connected peer was not reported as an active call")
+	for _, tc := range []struct {
+		name  string
+		peers map[string]bool
+		want  bool
+	}{
+		{name: "empty room", peers: map[string]bool{}},
+		{name: "one alone", peers: map[string]bool{"a": false}},
+		{name: "lurkers only", peers: map[string]bool{"a": true, "b": true, "c": true}},
+		{name: "one and a crowd of lurkers", peers: map[string]bool{"a": false, "b": true, "c": true}},
+		{name: "two talking", peers: map[string]bool{"a": false, "b": false}, want: true},
+		{name: "two talking among lurkers", peers: map[string]bool{"a": false, "b": true, "c": false}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m.mu.Lock()
+			m.live["room"] = &liveRoom{peers: tc.peers}
+			m.mu.Unlock()
+			if got := m.HasActiveCall(); got != tc.want {
+				t.Fatalf("HasActiveCall = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
