@@ -417,12 +417,20 @@ func (m *Manager) acquire(slug string) (*liveRoom, error) {
 	return lr, nil
 }
 
+// peerJoined records the peer and clears any empty countdown. Clearing it here and not
+// only in acquire is what covers a reconnect that evicts its own stale session: the SFU
+// fires the eviction's OnPeerLeft first, so the room is stamped empty a moment before its
+// replacement arrives, and the sweeper would otherwise end a room somebody is sitting in.
 func (m *Manager) peerJoined(slug, id string, chatOnly bool) {
 	m.mu.Lock()
-	if lr, ok := m.live[slug]; ok {
+	lr, ok := m.live[slug]
+	if ok {
 		lr.peers[id] = chatOnly
 	}
 	m.mu.Unlock()
+	if ok {
+		m.markOccupied(slug)
+	}
 }
 
 // peerLeft removes a peer and, when the room empties, stamps empty_since so the

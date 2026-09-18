@@ -338,6 +338,31 @@ func TestReconnectClearsEmptyCountdown(t *testing.T) {
 	}
 }
 
+// A reconnect that evicts its own stale session drives peerLeft then peerJoined without
+// passing through acquire: the room is stamped empty and refilled in one breath, so only
+// peerJoined is left to clear the countdown.
+func TestEvictedReconnectClearsEmptyCountdown(t *testing.T) {
+	m, database, clock := newTestManager(t)
+	ctx := context.Background()
+	slug, _ := seedLiveRoom(t, m, "stale")
+
+	m.peerLeft(slug, "stale")
+	if emptySinceOf(t, database, slug) == "" {
+		t.Fatal("empty_since not stamped when room emptied")
+	}
+
+	m.peerJoined(slug, "fresh", false)
+	if es := emptySinceOf(t, database, slug); es != "" {
+		t.Fatalf("empty_since not cleared when a peer rejoined: %q", es)
+	}
+
+	*clock = clock.Add(2 * m.cfg.GracePeriod)
+	m.sweep(ctx)
+	if got := statusOf(t, database, slug); got != "active" {
+		t.Fatalf("room with a live peer was ended: %q", got)
+	}
+}
+
 func TestHasActiveCall(t *testing.T) {
 	m, _, _ := newTestManager(t)
 	if m.HasActiveCall() {
