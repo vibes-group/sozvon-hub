@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Phone held sideways: little height, so chrome gets compact. */
+@custom-variant short (@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px));
+
 @theme {
   /* Signal Minimal palette — black canvas, deep gray cards, vibrant green accent. */
   --color-bg-0: #050505;
@@ -124,7 +127,7 @@
   }
 
   .btn-mini {
-    @apply px-2.5 py-1.5 text-[11px];
+    @apply px-2.5 py-1.5 text-[11px] pointer-coarse:p-3;
   }
 
   .input-field {
@@ -233,5 +236,12 @@
   textarea,
   select {
     font-size: 16px;
+  }
+}
+
+/* Touch: pull-to-refresh would reload the page and drop the call. */
+@media (pointer: coarse) {
+  html:has([data-call]) {
+    overscroll-behavior-y: none;
   }
 }

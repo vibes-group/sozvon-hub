@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LayoutGrid, MessageSquare, Presentation, Share2, SlidersHorizontal, X } from 'lucide-react';
 import { shareRoom } from '../api';
-import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
+import { selectParticipants, selectSelfPeerId, useStore, type ChatMessage } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
 import { useCameraStore } from '../store/useCameraStore';
 import { listMediaDevices } from '../utils/devices';
+import { loadOrCreateClientId } from '../utils/storage';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { useSFU } from '../hooks/useSFU';
 import { useSessionManager } from '../hooks/useSessionManager';
@@ -49,6 +50,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   // Chat is a togglable right drawer; settings live in a modal. Both start
   // closed so the call grid gets the full width.
   const [chatOpen, setChatOpen] = useState(false);
+  const unread = useUnreadChat(chatOpen);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [name, setName] = useState(displayName);
 
@@ -392,8 +394,11 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
 
   return (
     <>
-      <main className="h-dvh overflow-hidden bg-bg-0 text-body flex flex-col">
-        <header className="flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] border-b border-line shrink-0">
+      <main
+        data-call
+        className="h-dvh overflow-hidden bg-bg-0 text-body flex flex-col pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+      >
+        <header className="flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] short:pb-1.5 short:pt-[calc(env(safe-area-inset-top)+0.375rem)] border-b border-line shrink-0">
           <div className="flex items-baseline gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
@@ -407,7 +412,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
               комната {roomSlug}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 max-sm:shrink-0">
             <span
               className={`hidden sm:block text-[12px] truncate ${
                 statusState === 'err' ? 'text-danger' : statusState === 'ok' ? 'text-good' : 'text-muted-2'
@@ -425,7 +430,12 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             >
               {stage ? <LayoutGrid size={18} /> : <Presentation size={18} />}
             </HeaderButton>
-            <HeaderButton label="Чат" active={chatOpen} onClick={() => setChatOpen((v) => !v)}>
+            <HeaderButton
+              label="Чат"
+              active={chatOpen}
+              badge={unread}
+              onClick={() => setChatOpen((v) => !v)}
+            >
               <MessageSquare size={18} />
             </HeaderButton>
             <HeaderButton
@@ -449,7 +459,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
 
         <div className="flex-1 min-h-0 flex">
           <section
-            className={`flex-1 min-w-0 min-h-0 overflow-hidden p-4 ${
+            className={`flex-1 min-w-0 min-h-0 overflow-hidden p-4 short:p-2 ${
               chatOpen ? 'hidden md:block' : ''
             }`}
           >
@@ -475,7 +485,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
           )}
         </div>
 
-        <footer className="border-t border-line bg-bg-0/95 backdrop-blur px-4 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shrink-0">
+        <footer className="border-t border-line bg-bg-0/95 backdrop-blur px-4 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] short:pt-1.5 short:pb-[calc(env(safe-area-inset-bottom)+0.375rem)] shrink-0">
           <ControlsBar
             onToggleMic={handleToggleMic}
             onToggleCamera={handleToggleCamera}
@@ -490,11 +500,12 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
 
       {settingsOpen && (
         <div
-          className="fixed inset-0 z-50 grid place-items-start justify-center overflow-y-auto bg-black/60 p-4 sm:py-10"
-          onClick={() => setSettingsOpen(false)}
+          className="fixed inset-0 z-50 grid place-items-start justify-center overflow-y-auto bg-black/60 p-4 sm:py-10 pointer-coarse:bg-bg-0 pointer-coarse:pt-[calc(env(safe-area-inset-top)+0.5rem)]"
+          // On touch the sheet is full-screen: a tap between cards isn't "outside".
+          onClick={() => !matchMedia('(pointer: coarse)').matches && setSettingsOpen(false)}
         >
           <div className="w-full max-w-md grid gap-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between pointer-coarse:sticky pointer-coarse:top-0 pointer-coarse:z-10 pointer-coarse:bg-bg-0 pointer-coarse:py-2">
               <span className="text-[13px] font-bold uppercase tracking-[0.18em] text-muted-2">
                 Настройки звонка
               </span>
@@ -502,7 +513,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
                 type="button"
                 onClick={() => setSettingsOpen(false)}
                 aria-label="Закрыть настройки"
-                className="grid h-9 w-9 place-items-center border border-line bg-bg-1 text-muted hover:border-accent hover:text-accent"
+                className="grid h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11 place-items-center border border-line bg-bg-1 text-muted hover:border-accent hover:text-accent"
               >
                 <X size={18} />
               </button>
@@ -548,14 +559,34 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   );
 }
 
+// Others' messages that arrived since the chat was last closed. Returns a
+// number, so upload-progress ticks don't re-render the call screen.
+function useUnreadChat(chatOpen: boolean): number {
+  const [selfClientId] = useState(loadOrCreateClientId);
+  const [seen, setSeen] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!chatOpen) setSeen(new Set(useStore.getState().chat.map((m) => m.id)));
+  }, [chatOpen]);
+  return useStore((s) => {
+    if (chatOpen) return 0;
+    const selfId = selectSelfPeerId(s);
+    // Same own-message rule as ChatPanel: peer ids change on reconnect.
+    const own = (m: ChatMessage) =>
+      m.senderClientId !== undefined ? m.senderClientId === selfClientId : m.from === selfId;
+    return s.chat.filter((m) => !m.pending && !seen.has(m.id) && !own(m)).length;
+  });
+}
+
 function HeaderButton({
   label,
   active = false,
+  badge = 0,
   onClick,
   children,
 }: {
   label: string;
   active?: boolean;
+  badge?: number;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -563,16 +594,21 @@ function HeaderButton({
     <button
       type="button"
       onClick={onClick}
-      aria-label={label}
+      aria-label={badge > 0 ? `${label}, непрочитанных: ${badge}` : label}
       aria-pressed={active}
       title={label}
-      className={`grid h-9 w-9 place-items-center border transition-colors ${
+      className={`relative grid h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11 shrink-0 place-items-center border transition-colors ${
         active
           ? 'border-accent text-accent bg-[rgba(75,226,119,0.1)]'
           : 'border-line text-muted hover:border-muted hover:text-text'
       }`}
     >
       {children}
+      {badge > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 grid h-5 min-w-5 place-items-center bg-accent px-1 text-[11px] font-bold tabular-nums text-accent-ink">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   );
 }

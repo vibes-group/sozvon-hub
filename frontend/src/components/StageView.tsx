@@ -49,21 +49,21 @@ export function StageView({ stage, onSetStage, onClose, onLocalAudioChange }: Pr
   })();
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col gap-3 lg:flex-row short:flex-row">
       <div className="relative min-h-0 min-w-0 flex-1">
         <button
           type="button"
           onClick={onClose}
           title="Вернуться к сетке"
           aria-label="Вернуться к сетке"
-          className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center border border-white/30 bg-black/55 text-white/90 backdrop-blur transition-colors hover:border-accent hover:text-accent"
+          className="absolute right-2 top-2 z-10 grid h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11 place-items-center border border-white/30 bg-black/55 text-white/90 backdrop-blur transition-colors hover:border-accent hover:text-accent"
         >
           <Grid3x3 size={18} />
         </button>
         {stageEl}
       </div>
 
-      <div className="flex shrink-0 gap-2 overflow-x-auto pb-1 lg:w-44 lg:flex-col lg:overflow-y-auto lg:overflow-x-hidden lg:pb-0">
+      <div className="flex shrink-0 gap-2 overflow-x-auto pb-1 lg:w-44 lg:flex-col lg:overflow-y-auto lg:overflow-x-hidden lg:pb-0 short:w-36 short:flex-col short:overflow-y-auto short:overflow-x-hidden short:pb-0">
         {showSelfShare && selfId && !onStage('screen', selfId) && (
           <FilmBox>
             <SelfScreenTile
@@ -98,7 +98,7 @@ export function StageView({ stage, onSetStage, onClose, onLocalAudioChange }: Pr
               </FilmBox>
             )
           ) : (
-            <div key={p.id} className="shrink-0 lg:w-full">
+            <div key={p.id} className="shrink-0 lg:w-full short:w-full">
               <AudioChip participant={p} onLocalAudioChange={onLocalAudioChange} />
             </div>
           ),
@@ -109,9 +109,9 @@ export function StageView({ stage, onSetStage, onClose, onLocalAudioChange }: Pr
 }
 
 // Fixed-size filmstrip slot: a row of 8rem tiles on mobile, a column of
-// full-width tiles on desktop.
+// full-width tiles on desktop and on a sideways phone.
 function FilmBox({ children }: { children: React.ReactNode }) {
-  return <div className="aspect-video w-32 shrink-0 lg:w-full">{children}</div>;
+  return <div className="aspect-video w-32 shrink-0 lg:w-full short:w-full">{children}</div>;
 }
 
 function StageCamera({ participant: p }: { participant: ParticipantUI }) {
@@ -238,21 +238,21 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-black">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 text-zinc-200">
+      <div className="flex items-center justify-between gap-2 py-2 pl-3 pr-12 pointer-coarse:pr-14 text-zinc-200">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <span className="truncate">Экран · {display}</span>
           {videoCodec && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400">
+            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
               {videoCodec.toUpperCase()}
             </span>
           )}
           {qualityLabel && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400">
+            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
               {qualityLabel}
             </span>
           )}
           {fpsLabel && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400">
+            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
               {fpsLabel}
             </span>
           )}
@@ -263,7 +263,7 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
               type="button"
               onClick={toggleAudioMute}
               aria-label={audioMuted ? 'Включить звук' : 'Выключить звук'}
-              className="rounded p-1 hover:bg-white/10"
+              className="rounded p-1 pointer-coarse:p-2.5 hover:bg-white/10"
             >
               {audioMuted ? (
                 <VolumeX size={18} strokeWidth={2.25} />
@@ -279,7 +279,7 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
               value={Math.round((audioMuted ? 0 : volume) * 100)}
               onChange={onVolumeInput}
               aria-label="Громкость звука с экрана"
-              className="w-24 accent-zinc-300"
+              className="w-24 max-sm:w-16 accent-zinc-300"
             />
           </div>
         )}

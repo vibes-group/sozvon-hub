@@ -435,8 +435,7 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!selfPeerId || files.length >= CHAT_MAX_ATTACHMENTS}
-            className="btn btn-secondary shrink-0 grid place-items-center p-0! border-0 disabled:opacity-40"
-            style={{ width: 38, height: 38 }}
+            className="btn btn-secondary shrink-0 grid place-items-center p-0! border-0 disabled:opacity-40 size-[38px] pointer-coarse:size-11"
             aria-label="Прикрепить файл"
             title="Прикрепить файл"
           >
@@ -472,8 +471,7 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
           <button
             onClick={handleSend}
             disabled={!canSend}
-            className="btn btn-primary shrink-0 grid place-items-center p-0!"
-            style={{ width: 38, height: 38 }}
+            className="btn btn-primary shrink-0 grid place-items-center p-0! size-[38px] pointer-coarse:size-11"
             aria-label="Отправить"
           >
             <Send size={20} />

@@ -59,7 +59,11 @@ function PinButton({ onClick, label, revealed }: { onClick: () => void; label: s
         onClick={onClick}
         aria-label={label}
         title={label}
-        className="pointer-events-auto grid h-11 w-11 place-items-center border border-white/30 bg-black/55 text-white/90 backdrop-blur transition-colors hover:border-accent hover:text-accent"
+        // Tiles with tap-to-reveal pass `revealed`: while hidden the button must
+        // not take the tap meant to reveal it. Others keep it always tappable.
+        className={`grid h-11 w-11 place-items-center border border-white/30 bg-black/55 text-white/90 backdrop-blur transition-colors hover:border-accent hover:text-accent group-hover:pointer-events-auto ${
+          revealed !== false ? 'pointer-events-auto' : ''
+        }`}
       >
         <Maximize2 size={18} />
       </button>
@@ -164,8 +168,8 @@ export function CameraTile({
       {!isFilm && isRemote && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 ${
-            revealed ? 'opacity-100' : 'opacity-0'
+          className={`absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-2.5 py-2 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 ${
+            revealed ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
         >
           <button
@@ -173,7 +177,7 @@ export function CameraTile({
             onClick={toggleLocalMute}
             aria-label={p.localMuted ? 'Включить звук участника' : 'Заглушить участника'}
             title={p.localMuted ? 'Включить звук участника' : 'Заглушить участника'}
-            className={`grid h-7 w-7 shrink-0 place-items-center ${
+            className={`grid h-7 w-7 pointer-coarse:h-10 pointer-coarse:w-10 shrink-0 place-items-center ${
               p.localMuted ? 'text-danger' : 'text-white/90 hover:text-accent'
             }`}
           >

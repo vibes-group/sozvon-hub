@@ -127,7 +127,7 @@ export function ParticipantGrid({
     <div className="flex h-full min-h-0 flex-col gap-3">
       {hasVideo ? (
         <div ref={areaRef} className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-col items-center gap-3 pointer-coarse:min-h-full pointer-coarse:justify-center">
             {layout.rows.map((row, i) => (
               <div key={i} className="flex justify-center gap-3" style={{ height: row.h }}>
                 {row.tiles.map((tl) => renderTile(tl.id, tl.w, tl.h))}
