@@ -27,10 +27,13 @@ function useElementSize() {
   return { ref, size };
 }
 
-type VideoTile =
-  | { kind: 'screen-self'; id: string }
-  | { kind: 'screen'; id: string; hasSystemAudio: boolean }
-  | { kind: 'camera'; id: string; participant: ParticipantUI };
+// `id` is the peer id; `key` is unique per tile — one peer can have both a
+// screen and a camera tile.
+type VideoTile = { key: string; id: string } & (
+  | { kind: 'screen-self' }
+  | { kind: 'screen'; hasSystemAudio: boolean }
+  | { kind: 'camera'; participant: ParticipantUI }
+);
 
 export function ParticipantGrid({
   onLocalAudioChange,
@@ -51,12 +54,18 @@ export function ParticipantGrid({
   // Video tiles lead (screens first), audio-only participants collapse to chips.
   const { videoTiles, audioParticipants } = useMemo(() => {
     const video: VideoTile[] = [];
-    if (showSelfShare && selfId) video.push({ kind: 'screen-self', id: selfId });
+    if (showSelfShare && selfId)
+      video.push({ kind: 'screen-self', key: `screen:${selfId}`, id: selfId });
     for (const sh of otherShares)
-      video.push({ kind: 'screen', id: sh.publisherId, hasSystemAudio: sh.hasSystemAudio });
+      video.push({
+        kind: 'screen',
+        key: `screen:${sh.publisherId}`,
+        id: sh.publisherId,
+        hasSystemAudio: sh.hasSystemAudio,
+      });
     const audio: ParticipantUI[] = [];
     for (const p of participants) {
-      if (p.cameraOn) video.push({ kind: 'camera', id: p.id, participant: p });
+      if (p.cameraOn) video.push({ kind: 'camera', key: `camera:${p.id}`, id: p.id, participant: p });
       else audio.push(p);
     }
     return { videoTiles: video, audioParticipants: audio };
@@ -73,7 +82,7 @@ export function ParticipantGrid({
   }, []);
   // Drop aspects for tiles that are gone so stale ratios don't linger.
   useEffect(() => {
-    const ids = new Set(videoTiles.map((t) => t.id));
+    const ids = new Set(videoTiles.map((t) => t.key));
     for (const key of aspectsRef.current.keys()) if (!ids.has(key)) aspectsRef.current.delete(key);
   }, [videoTiles]);
 
@@ -81,27 +90,28 @@ export function ParticipantGrid({
 
   const layout = useMemo(() => {
     const items: LayoutInput[] = videoTiles.map((t) => ({
-      id: t.id,
-      ar: aspectsRef.current.get(t.id) ?? 16 / 9,
+      id: t.key,
+      ar: aspectsRef.current.get(t.key) ?? 16 / 9,
     }));
     return justifiedLayout(items, size.w, size.h, GAP, { minH: 96, maxH: size.h });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoTiles, size.w, size.h, aspectVer]);
 
-  const tileById = useMemo(() => new Map(videoTiles.map((t) => [t.id, t])), [videoTiles]);
+  const tileByKey = useMemo(() => new Map(videoTiles.map((t) => [t.key, t])), [videoTiles]);
 
   const hasVideo = videoTiles.length > 0;
 
-  function renderTile(id: string, w: number, h: number) {
-    const t = tileById.get(id);
+  function renderTile(key: string, w: number, h: number) {
+    const t = tileByKey.get(key);
     if (!t) return null;
+    const { id } = t;
     return (
-      <div key={id} style={{ width: w, height: h }}>
+      <div key={key} style={{ width: w, height: h }}>
         {t.kind === 'screen-self' && myStream && (
           <SelfScreenTile
             stream={myStream}
             onPin={() => onPin({ kind: 'screen', id })}
-            onAspect={(ar) => reportAspect(id, ar)}
+            onAspect={(ar) => reportAspect(key, ar)}
           />
         )}
         {t.kind === 'screen' && (
@@ -116,7 +126,7 @@ export function ParticipantGrid({
             participant={t.participant}
             onLocalAudioChange={onLocalAudioChange}
             onPin={() => onPin({ kind: 'camera', id })}
-            onAspect={(ar) => reportAspect(id, ar)}
+            onAspect={(ar) => reportAspect(key, ar)}
           />
         )}
       </div>

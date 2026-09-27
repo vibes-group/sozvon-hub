@@ -362,7 +362,8 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
         );
         return;
       }
-      throw err;
+      console.error('[session] screen share start failed:', err);
+      getStore().setStatus('Не удалось начать показ экрана. Попробуйте ещё раз.', true, true);
     }
   }, [sfu, getStore]);
 
