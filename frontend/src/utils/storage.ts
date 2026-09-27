@@ -11,6 +11,7 @@ export const KEYS = {
   sendVolume: 'sozvon-hub.send-volume',
   engine: 'sozvon-hub.engine',
   micDeviceId: 'sozvon-hub.mic-device-id',
+  speakerDeviceId: 'sozvon-hub.speaker-device-id',
   camDeviceId: 'sozvon-hub.cam-device-id',
   // Persistent mute/deafen state — Discord-style, survives reloads.
   selfMuted: 'sozvon-hub.self-muted',
@@ -226,6 +227,15 @@ export function loadMicDeviceId(): string | null {
 export function saveMicDeviceId(id: string | null): void {
   if (id) localStorage.setItem(KEYS.micDeviceId, id);
   else localStorage.removeItem(KEYS.micDeviceId);
+}
+
+export function loadSpeakerDeviceId(): string | null {
+  return localStorage.getItem(KEYS.speakerDeviceId) || null;
+}
+
+export function saveSpeakerDeviceId(id: string | null): void {
+  if (id) localStorage.setItem(KEYS.speakerDeviceId, id);
+  else localStorage.removeItem(KEYS.speakerDeviceId);
 }
 
 export function loadCamDeviceId(): string | null {

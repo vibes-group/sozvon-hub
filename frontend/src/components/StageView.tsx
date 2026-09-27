@@ -10,6 +10,7 @@ import { useStore, selectParticipants, selectSelfPeerId } from '../store/useStor
 import { useCameraStore } from '../store/useCameraStore';
 import { loadScreenAudioVolume, saveScreenAudioVolume } from '../utils/storage';
 import { useVideoFps, useVideoStream } from '../screenshare/useVideoFps';
+import { routeToSpeaker } from '../audio/output';
 import type { ParticipantUI } from '../types';
 import type { StageTarget } from './tileLayout';
 import { AudioChip, CameraTile, ScreenShareTile, SelfScreenTile, shouldMirrorSelf } from './CallTiles';
@@ -210,6 +211,11 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
+
+  const speakerDeviceId = useStore((s) => s.speakerDeviceId);
+  useEffect(() => {
+    if (audioRef.current) void routeToSpeaker(audioRef.current);
+  }, [speakerDeviceId, audioStream]);
 
   function toggleAudioMute() {
     const next = !audioMuted;

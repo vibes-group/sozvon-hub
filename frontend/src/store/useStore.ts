@@ -9,6 +9,7 @@ import {
   loadBoolean,
   loadEngine,
   loadMicDeviceId,
+  loadSpeakerDeviceId,
   loadCamDeviceId,
   loadNumber,
   saveBoolean,
@@ -16,6 +17,7 @@ import {
   saveOutputVolume,
   saveEngine,
   saveMicDeviceId,
+  saveSpeakerDeviceId,
   saveCamDeviceId,
 } from '../utils/storage';
 
@@ -94,6 +96,9 @@ export interface AppState {
 
   micDeviceId: string | null;
   setMicDeviceId: (id: string | null) => void;
+  // null = system default.
+  speakerDeviceId: string | null;
+  setSpeakerDeviceId: (id: string | null) => void;
   camDeviceId: string | null;
   setCamDeviceId: (id: string | null) => void;
 
@@ -171,6 +176,11 @@ export const useStore = create<AppState>((set) => ({
   setMicDeviceId: (id) => {
     saveMicDeviceId(id);
     set({ micDeviceId: id });
+  },
+  speakerDeviceId: loadSpeakerDeviceId(),
+  setSpeakerDeviceId: (id) => {
+    saveSpeakerDeviceId(id);
+    set({ speakerDeviceId: id });
   },
   camDeviceId: loadCamDeviceId(),
   setCamDeviceId: (id) => {

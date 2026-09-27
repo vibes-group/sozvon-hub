@@ -7,11 +7,11 @@ export const IS_TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(hover:
 export const IS_DESKTOP =
   typeof matchMedia !== 'undefined' && matchMedia('(hover: hover) and (pointer: fine)').matches;
 
-// Enumerate real media input devices of one kind, dropping the synthetic
+// Enumerate real media devices of one kind, dropping the synthetic
 // "default"/"communications" aliases (and any empty id) the browser adds, so
 // each physical device shows exactly once. Resolves to [] when mediaDevices is
 // unavailable. Matches voice-hub.
-export function listInputDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
+export function listMediaDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
   return (navigator.mediaDevices?.enumerateDevices?.() ?? Promise.resolve([])).then((all) =>
     all
       .filter(
@@ -27,15 +27,15 @@ export function listInputDevices(kind: MediaDeviceKind): Promise<MediaDeviceInfo
   );
 }
 
-// Reactive list of real input devices of one kind. Re-enumerates on
+// Reactive list of real media devices of one kind. Re-enumerates on
 // `devicechange` and whenever `dep` changes — device ids/labels only populate
 // after permission is granted, so callers pass e.g. `cameraOn` to re-read then.
-export function useInputDevices(kind: MediaDeviceKind, dep?: unknown): MediaDeviceInfo[] {
+export function useMediaDevices(kind: MediaDeviceKind, dep?: unknown): MediaDeviceInfo[] {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   useEffect(() => {
     let cancelled = false;
     const refresh = () => {
-      listInputDevices(kind)
+      listMediaDevices(kind)
         .then((real) => {
           if (!cancelled) setDevices(real);
         })

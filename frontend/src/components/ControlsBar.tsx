@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
-import { useInputDevices } from '../utils/devices';
+import { useMediaDevices } from '../utils/devices';
 
 type Props = {
   onToggleMic: () => void;
@@ -116,7 +116,7 @@ export function ControlsBar({
   const sharing = useScreenShareStore((s) => s.myStatus === 'publishing' || s.myStatus === 'starting');
   // ≥2 cameras means a front/back pair (phones) where a quick flip makes sense.
   // Pass cameraOn so the list re-reads once permission populates device ids.
-  const canFlip = useInputDevices('videoinput', cameraOn).length >= 2 && !!onFlipCamera;
+  const canFlip = useMediaDevices('videoinput', cameraOn).length >= 2 && !!onFlipCamera;
 
   return (
     <div className="flex items-center justify-center gap-3 flex-wrap">

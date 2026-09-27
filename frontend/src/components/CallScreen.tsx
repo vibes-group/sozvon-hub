@@ -4,7 +4,7 @@ import { shareRoom } from '../api';
 import { selectParticipants, selectSelfPeerId, useStore } from '../store/useStore';
 import { useScreenShareStore } from '../store/useScreenShareStore';
 import { useCameraStore } from '../store/useCameraStore';
-import { listInputDevices } from '../utils/devices';
+import { listMediaDevices } from '../utils/devices';
 import { useAudioEngine } from '../hooks/useAudioEngine';
 import { useSFU } from '../hooks/useSFU';
 import { useSessionManager } from '../hooks/useSessionManager';
@@ -212,6 +212,16 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
     [session],
   );
 
+  const handleSpeakerDeviceSelect = useCallback(
+    (deviceId: string | null) => {
+      const s = useStore.getState();
+      if (deviceId === s.speakerDeviceId) return;
+      s.setSpeakerDeviceId(deviceId);
+      audio.routeRemoteToSpeaker();
+    },
+    [audio],
+  );
+
   const handleCamDeviceSelect = useCallback(
     async (deviceId: string | null) => {
       const s = useStore.getState();
@@ -242,7 +252,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
   // is on.
   const handleFlipCamera = useCallback(async () => {
     try {
-      const cams = await listInputDevices('videoinput');
+      const cams = await listMediaDevices('videoinput');
       if (cams.length < 2) return;
       // Use the live track's real deviceId, not the stored camDeviceId — the
       // latter is null when the camera started on the default device, which
@@ -284,9 +294,16 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
     audio.applyAllRemoteGains();
     void handleEngineSelect('browser');
     void handleMicDeviceSelect(null);
+    handleSpeakerDeviceSelect(null);
     void handleCamDeviceSelect(null);
     useStore.getState().setStatus('Настройки сброшены.', false, true);
-  }, [audio, handleEngineSelect, handleMicDeviceSelect, handleCamDeviceSelect]);
+  }, [
+    audio,
+    handleEngineSelect,
+    handleMicDeviceSelect,
+    handleSpeakerDeviceSelect,
+    handleCamDeviceSelect,
+  ]);
 
   // Promote a feed to the stage (from a grid tile or a filmstrip swap).
   const handlePin = useCallback((target: StageTarget) => setStage(target), []);
@@ -506,6 +523,7 @@ export function CallScreen({ roomSlug, displayName, onLeave }: Props) {
             <DeviceSettings
               onEngineSelect={handleEngineSelect}
               onMicDeviceSelect={handleMicDeviceSelect}
+              onSpeakerDeviceSelect={handleSpeakerDeviceSelect}
               onCamDeviceSelect={handleCamDeviceSelect}
               onSendVolumeChange={handleSendVolumeChange}
               onOutputVolumeChange={handleOutputVolumeChange}

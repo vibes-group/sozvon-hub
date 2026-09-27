@@ -4,11 +4,13 @@ import { useStore } from '../store/useStore';
 import { ENGINE_OPTIONS, type ActiveEngineKind } from '../audio/engine';
 import type { EngineKind } from '../types';
 import { Toggle } from './Toggle';
-import { useInputDevices } from '../utils/devices';
+import { useMediaDevices } from '../utils/devices';
+import { SPEAKER_SELECTABLE } from '../audio/output';
 
 type Props = {
   onEngineSelect: (engine: EngineKind) => void;
   onMicDeviceSelect: (deviceId: string | null) => void;
+  onSpeakerDeviceSelect: (deviceId: string | null) => void;
   onCamDeviceSelect: (deviceId: string | null) => void;
   onSendVolumeChange: (v: number) => void;
   onOutputVolumeChange: (v: number) => void;
@@ -58,6 +60,7 @@ function Select({
 export function DeviceSettings({
   onEngineSelect,
   onMicDeviceSelect,
+  onSpeakerDeviceSelect,
   onCamDeviceSelect,
   onSendVolumeChange,
   onOutputVolumeChange,
@@ -67,6 +70,7 @@ export function DeviceSettings({
   const sendVolume = useStore((s) => s.sendVolume);
   const outputVolume = useStore((s) => s.outputVolume);
   const micDeviceId = useStore((s) => s.micDeviceId);
+  const speakerDeviceId = useStore((s) => s.speakerDeviceId);
   const camDeviceId = useStore((s) => s.camDeviceId);
 
   // Remember the last denoiser variant so flipping the switch off and on again
@@ -78,8 +82,9 @@ export function DeviceSettings({
     if (engine !== 'off') setLastVariant(engine);
   }, [engine]);
 
-  const mics = useInputDevices('audioinput');
-  const cams = useInputDevices('videoinput');
+  const mics = useMediaDevices('audioinput');
+  const speakers = useMediaDevices('audiooutput');
+  const cams = useMediaDevices('videoinput');
 
   return (
     <section className="card grid gap-5">
@@ -159,6 +164,24 @@ export function DeviceSettings({
           ))}
         </Select>
       </label>
+
+      {SPEAKER_SELECTABLE && (
+        <label className="grid gap-1.5">
+          <span className="section-label">Динамики</span>
+          <Select
+            value={speakerDeviceId ?? ''}
+            ariaLabel="Динамики"
+            onChange={(v) => onSpeakerDeviceSelect(v || null)}
+          >
+            <option value="">Системные по умолчанию</option>
+            {speakers.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Динамики ${d.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </Select>
+        </label>
+      )}
 
       <label className="grid gap-1.5">
         <span className="section-label">Камера</span>
