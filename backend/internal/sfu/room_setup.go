@@ -10,8 +10,8 @@ import (
 	"sozvon-hub/backend/internal/sfu/dd"
 )
 
-// NewRoom creates and configures a Room with audio codecs, screen-share video
-// codecs, and the full interceptor chain (RTCP reports, NACK
+// NewRoom creates and configures a Room with audio codecs, screen-share and
+// camera video codecs with RTX, and the full interceptor chain (RTCP reports, NACK
 // responder, GCC bandwidth estimator, TWCC header extension + sender).
 func NewRoom(cfg Config) (*Room, error) {
 	settingEngine := webrtc.SettingEngine{}
@@ -38,39 +38,27 @@ func NewRoom(cfg Config) (*Room, error) {
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
-	// Screen-share video codecs. AV1 stays preferred by client-side codec
-	// ordering; VP9 is registered as the compatibility fallback when AV1 is
-	// absent or has proven CPU-bound on this client.
-	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeAV1,
-			ClockRate:   90000,
-			SDPFmtpLine: "level-idx=5;profile=0;tier=0",
-		},
-		PayloadType: 45,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
+	videoCodecs := []struct {
+		capability webrtc.RTPCodecCapability
+		pt, rtxPT  webrtc.PayloadType
+	}{
+		// Screen share. AV1 stays preferred by client-side codec ordering; VP9
+		// is the compatibility fallback when AV1 is absent or has proven
+		// CPU-bound on this client.
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeAV1, ClockRate: 90000, SDPFmtpLine: "level-idx=5;profile=0;tier=0"}, 45, 46},
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP9, ClockRate: 90000}, 98, 99},
+		// Camera: VP8. Single layer (no SVC/simulcast), so no layer selection;
+		// GCC/TWCC does bitrate control. Chosen for its universal browser
+		// encode/decode support and HW-decode availability.
+		{webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}, 96, 97},
 	}
-	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeVP9,
-			ClockRate: 90000,
-		},
-		PayloadType: 98,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
-	}
-	// Camera video codec: VP8. Single layer (no SVC/simulcast); the SFU forwards
-	// every packet verbatim and relies on GCC/TWCC for bitrate control. Chosen
-	// for its universal browser encode/decode support and HW-decode availability.
-	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeVP8,
-			ClockRate: 90000,
-		},
-		PayloadType: 96,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		return nil, err
+	for _, c := range videoCodecs {
+		if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: c.capability,
+			PayloadType:        c.pt,
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, err
+		}
 	}
 	// DD extension negotiated here so per-PC extension IDs are included in SDP.
 	if err := mediaEngine.RegisterHeaderExtension(
@@ -84,9 +72,6 @@ func NewRoom(cfg Config) (*Room, error) {
 	// No interval PLI either: keyframes come from requestKeyframe and relayed
 	// subscriber PLIs, not forced every few seconds.
 	ir := &interceptor.Registry{}
-	if err := webrtc.ConfigureRTCPReports(ir); err != nil {
-		return nil, err
-	}
 
 	ccFactory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		// NoOpPacer: we only want gcc's BWE estimate (for bwCapTID); the
@@ -118,9 +103,13 @@ func NewRoom(cfg Config) (*Room, error) {
 	//     get it for their own BWE.
 	//   - NACK responder wraps HeaderExtension, so retransmits get a fresh
 	//     seq# and count toward the estimate.
+	//   - RTCP reports go outermost: the sender-report stream counts every
+	//     packet written beneath it regardless of SSRC, and an RTX packet
+	//     (own seq#, old timestamp) would skew the SR RTP time receivers use
+	//     for A/V sync.
 	// Configure* and RegisterFeedback add the rtcp-fb / extmap SDP lines
 	// browsers need to send NACK/TWCC; they must run after RegisterCodec.
-	ir.Add(ccFactory)
+	ir.Add(rtxPacerFactory{ccFactory})
 	if err := webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, ir); err != nil {
 		return nil, err
 	}
@@ -140,6 +129,19 @@ func NewRoom(cfg Config) (*Room, error) {
 	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBNACK}, webrtc.RTPCodecTypeVideo)
 	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBNACK, Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
 	ir.Add(nackResponder)
+	if err := webrtc.ConfigureRTCPReports(ir); err != nil {
+		return nil, err
+	}
+
+	// RTX after RegisterFeedback, which applies to every codec registered so
+	// far: RTX streams take no feedback (RFC 4588 §6.3). Retransmits to
+	// subscribers go on the RTX SSRC; what publishers send on theirs is
+	// dropped by forwardable.
+	for _, c := range videoCodecs {
+		if err := registerRTX(mediaEngine, c.rtxPT, c.pt); err != nil {
+			return nil, err
+		}
+	}
 
 	r.api = webrtc.NewAPI(
 		webrtc.WithSettingEngine(settingEngine),

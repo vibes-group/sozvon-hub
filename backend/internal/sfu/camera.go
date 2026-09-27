@@ -485,15 +485,18 @@ func (r *Room) removeCameraSubscriber(sub *peer, publisherID, reason string) {
 
 // forwardVideo reads RTP from the publisher's remote camera track and writes to
 // every active subscriber's per-sub track. VP8 is single-layer, so there is no
-// temporal-layer gate — every packet is forwarded.
+// temporal-layer gate — every forwardable packet goes out.
 func (s *CameraSession) forwardVideo(remote *webrtc.TrackRemote) {
 	for {
-		pkt, _, err := remote.ReadRTP()
+		pkt, attrs, err := remote.ReadRTP()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				log.Printf("sfu: camera forwardVideo (%s) read: %v", s.PublisherID, err)
 			}
 			return
+		}
+		if !forwardable(pkt, attrs) {
+			continue
 		}
 
 		for _, sub := range s.subscribersSnapshot() {
