@@ -1,22 +1,18 @@
 package sfu
 
 import (
-	"time"
-
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/cc"
 	"github.com/pion/interceptor/pkg/gcc"
-	"github.com/pion/interceptor/pkg/intervalpli"
 	"github.com/pion/interceptor/pkg/nack"
-	"github.com/pion/interceptor/pkg/twcc"
 	"github.com/pion/webrtc/v4"
 
 	"sozvon-hub/backend/internal/sfu/dd"
 )
 
 // NewRoom creates and configures a Room with audio codecs, screen-share video
-// codecs, and the full interceptor chain (RTCP reports, interval PLI, NACK,
-// GCC bandwidth estimator, TWCC header extension + sender).
+// codecs, and the full interceptor chain (RTCP reports, NACK
+// responder, GCC bandwidth estimator, TWCC header extension + sender).
 func NewRoom(cfg Config) (*Room, error) {
 	settingEngine := webrtc.SettingEngine{}
 	if len(cfg.NAT1To1IPs) > 0 {
@@ -85,22 +81,12 @@ func NewRoom(cfg Config) (*Room, error) {
 	}
 
 	// Stats interceptor skipped — getStats is never consumed server-side.
+	// No interval PLI either: keyframes come from requestKeyframe and relayed
+	// subscriber PLIs, not forced every few seconds.
 	ir := &interceptor.Registry{}
 	if err := webrtc.ConfigureRTCPReports(ir); err != nil {
 		return nil, err
 	}
-	pliFactory, err := intervalpli.NewReceiverInterceptor(
-		intervalpli.GeneratorInterval(3 * time.Second),
-	)
-	if err != nil {
-		return nil, err
-	}
-	ir.Add(pliFactory)
-	nackFactory, err := nack.NewResponderInterceptor()
-	if err != nil {
-		return nil, err
-	}
-	ir.Add(nackFactory)
 
 	ccFactory, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		// NoOpPacer: we only want gcc's BWE estimate (for bwCapTID); the
@@ -125,27 +111,35 @@ func NewRoom(cfg Config) (*Room, error) {
 		r.pendingBWE = bwe
 	})
 
-	// Interceptor chain order matters: last-added is OUTERMOST on the write
-	// path. cc/gcc's OnSent reads the TWCC header extension, so the writer
-	// that SETS the extension must wrap cc (be outer).
-	//
-	// Two distinct TWCC interceptors:
-	//   - HeaderExtensionInterceptor sets the seq# in outgoing RTP headers.
-	//   - SenderInterceptor generates RTCP feedback for INCOMING RTP and
-	//     does not touch the RTP write path.
-	// We need both: HE outboard of cc so cc.OnSent finds the extension,
-	// and Sender so publishers receive TWCC feedback for their own BWE.
+	// Interceptor order matters: last-added is OUTERMOST on the write path.
+	//   - TWCC HeaderExtension sets the transport seq# and must wrap cc, so
+	//     cc.OnSent finds it.
+	//   - TWCC Sender only generates feedback for INCOMING RTP, so publishers
+	//     get it for their own BWE.
+	//   - NACK responder wraps HeaderExtension, so retransmits get a fresh
+	//     seq# and count toward the estimate.
+	// Configure* and RegisterFeedback add the rtcp-fb / extmap SDP lines
+	// browsers need to send NACK/TWCC; they must run after RegisterCodec.
 	ir.Add(ccFactory)
-	twccHeaderExt, err := twcc.NewHeaderExtensionInterceptor()
+	if err := webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, ir); err != nil {
+		return nil, err
+	}
+	if err := webrtc.ConfigureTWCCSender(mediaEngine, ir); err != nil {
+		return nil, err
+	}
+	// NACK responder only, no generator: the SFU renumbers forwarded packets,
+	// so a retransmit pulled from the publisher would arrive with a fresh seq#
+	// and a stale timestamp and repair nothing. No ccm fir either: RTCP relay
+	// rewrites only MediaSSRC, so a forwarded FIR is ignored; browsers use PLI.
+	// 256 packets (default 1024) is still well over one RTT of history and
+	// keeps the per-subscriber-stream buffer small.
+	nackResponder, err := nack.NewResponderInterceptor(nack.ResponderSize(256))
 	if err != nil {
 		return nil, err
 	}
-	ir.Add(twccHeaderExt)
-	twccSender, err := twcc.NewSenderInterceptor()
-	if err != nil {
-		return nil, err
-	}
-	ir.Add(twccSender)
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBNACK}, webrtc.RTPCodecTypeVideo)
+	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBNACK, Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	ir.Add(nackResponder)
 
 	r.api = webrtc.NewAPI(
 		webrtc.WithSettingEngine(settingEngine),
