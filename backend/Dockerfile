@@ -1,4 +1,4 @@
-FROM node:24.21-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS frontend
+FROM node:24.22-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS frontend
 
 WORKDIR /src/frontend
 
@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend ./
 RUN --mount=type=cache,target=/root/.npm npm run build
 
-FROM golang:1.27-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS build
+FROM golang:1.27-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c AS build
 
 WORKDIR /src
 
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux \
     go build -ldflags="-s -w" -o /out/sozvon-hub-app ./cmd/server
 
-FROM debian:13-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+FROM debian:13-slim@sha256:89c1ea91e897f0fe0a3731595330bc45b8bdef4047464a07116f891a94054b31
 
 RUN apt-get update \
  && apt-get upgrade -y \
