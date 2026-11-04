@@ -92,7 +92,8 @@ jobs:
 
   scan:
     needs: build
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04, image 20261101): trivy-action's install.sh fails with curl exit 6.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
