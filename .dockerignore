@@ -14,6 +14,7 @@ tmp
 **/.vite
 **/*.tsbuildinfo
 backend/data
+backend/target
 *.md
 .env*
 scratch

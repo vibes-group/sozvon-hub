@@ -25,9 +25,10 @@ async function resolveAttachmentBlob(
 }
 
 // Triggers a browser download of the attachment via a synthetic anchor.
-export async function downloadAttachment(att: Attachment, roomId: string): Promise<void> {
+// Throws when the bytes can't be had, including an upload the server evicted.
+async function downloadAttachment(att: Attachment, roomId: string): Promise<void> {
   const blob = await resolveAttachmentBlob(att.uploadId, roomId);
-  if (!blob) return;
+  if (!blob) throw new Error('attachment unavailable');
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -38,33 +39,66 @@ export async function downloadAttachment(att: Attachment, roomId: string): Promi
   URL.revokeObjectURL(url);
 }
 
-export type AttachmentUrlStatus = 'loading' | 'ready' | 'unavailable' | 'error';
+// Saves the attachments one after another; a failure doesn't stop the rest.
+// Resolves to the ones that failed.
+export async function downloadAttachments(
+  attachments: Attachment[],
+  roomId: string,
+): Promise<Attachment[]> {
+  const failed: Attachment[] = [];
+  for (const att of attachments) {
+    try {
+      await downloadAttachment(att, roomId);
+    } catch {
+      failed.push(att);
+    }
+  }
+  return failed;
+}
 
-export type AttachmentUrlState = {
-  url: string | null;
-  status: AttachmentUrlStatus;
-  reload: () => void;
-};
+type DownloadState = 'idle' | 'busy' | 'failed';
+
+// Download button state for one or several attachments. The next start
+// retries only the ones that failed.
+export function useDownload(
+  attachments: Attachment[],
+  roomId: string,
+): { state: DownloadState; start: () => void } {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<Attachment[]>([]);
+  // Guards against a second click landing before the disabled state renders.
+  const running = useRef(false);
+
+  async function run() {
+    if (running.current) return;
+    running.current = true;
+    setBusy(true);
+    setFailed(await downloadAttachments(failed.length ? failed : attachments, roomId));
+    setBusy(false);
+    running.current = false;
+  }
+
+  return { state: busy ? 'busy' : failed.length ? 'failed' : 'idle', start: () => void run() };
+}
+
+type AttachmentUrlStatus = 'loading' | 'ready' | 'unavailable' | 'error';
 
 // Resolves an attachment to an object URL for rendering, owning the URL's
 // lifecycle (revoked on unmount or when the source changes) so callers never
-// leak. 'unavailable' is the terminal 404 state; 'error' is retryable. Pass
-// enabled=false to skip resolution entirely.
+// leak. 'unavailable' is the terminal 404 state; 'error' is retryable.
 export function useAttachmentUrl(
   uploadId: string,
   roomId: string,
-  enabled = true,
-): AttachmentUrlState {
+): { url: string | null; status: AttachmentUrlStatus; reload: () => void } {
   const [status, setStatus] = useState<AttachmentUrlStatus>('loading');
   const [url, setUrl] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const urlRef = useRef<string | null>(null);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
-    if (!enabled) return;
     let cancelled = false;
+    let objectUrl: string | null = null;
     const controller = new AbortController();
     setStatus('loading');
     setUrl(null);
@@ -76,8 +110,7 @@ export function useAttachmentUrl(
           setStatus('unavailable');
           return;
         }
-        const objectUrl = URL.createObjectURL(blob);
-        urlRef.current = objectUrl;
+        objectUrl = URL.createObjectURL(blob);
         setUrl(objectUrl);
         setStatus('ready');
       })
@@ -89,12 +122,9 @@ export function useAttachmentUrl(
     return () => {
       cancelled = true;
       controller.abort();
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current);
-        urlRef.current = null;
-      }
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [uploadId, roomId, attempt, enabled]);
+  }, [uploadId, roomId, attempt]);
 
   return { url, status, reload };
 }

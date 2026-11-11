@@ -1,5 +1,4 @@
-// Zustand store: reactive UI state.
-// Audio nodes are NOT stored here — they live in imperative refs inside useAudioEngine.
+// Reactive UI state. Audio nodes live in imperative refs inside useAudioEngine.
 
 import { create } from 'zustand';
 import type { EngineKind, ParticipantUI } from '../types';
@@ -13,8 +12,7 @@ import {
   loadCamDeviceId,
   loadNumber,
   saveBoolean,
-  saveSendVolume,
-  saveOutputVolume,
+  saveNumber,
   saveEngine,
   saveMicDeviceId,
   saveSpeakerDeviceId,
@@ -36,7 +34,7 @@ export type ChatMessage = {
   uploadFailed?: boolean;
 };
 
-export type JoinState = 'idle' | 'joining' | 'joined';
+type JoinState = 'idle' | 'joining' | 'joined';
 type StatusState = 'idle' | 'ok' | 'err';
 
 // Order purely by a stable key so every client renders participants in the
@@ -157,12 +155,12 @@ export const useStore = create<AppState>((set) => ({
 
   sendVolume: loadNumber(KEYS.sendVolume, 100),
   setSendVolume: (v) => {
-    saveSendVolume(v);
+    saveNumber(KEYS.sendVolume, v);
     set({ sendVolume: v });
   },
   outputVolume: loadNumber(KEYS.outputVolume, 100),
   setOutputVolume: (v) => {
-    saveOutputVolume(v);
+    saveNumber(KEYS.outputVolume, v);
     set({ outputVolume: v });
   },
 

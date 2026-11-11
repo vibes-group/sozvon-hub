@@ -9,7 +9,7 @@ import {
   type DragEvent,
   type ClipboardEvent,
 } from 'react';
-import { Send, Info, Paperclip, X, Trash2, WifiOff } from 'lucide-react';
+import { Send, Info, Paperclip, X, Trash2, WifiOff, Download } from 'lucide-react';
 import { selectSelfPeerId, useStore, type ChatMessage } from '../store/useStore';
 import {
   CHAT_MAX_BYTES,
@@ -18,10 +18,19 @@ import {
   type AttachmentKind,
 } from '../sfu/protocol';
 import { loadOrCreateClientId } from '../utils/storage';
-import { uploadFile, imageMeta, MAX_UPLOAD_BYTES, TEMP_UPLOAD_PREFIX } from '../utils/uploadFile';
+import {
+  uploadFile,
+  imageMeta,
+  videoMeta,
+  MAX_UPLOAD_BYTES,
+  TEMP_UPLOAD_PREFIX,
+} from '../utils/uploadFile';
+import { isInlineVideo } from '../utils/mediaBox';
+import { useDownload } from '../hooks/useAttachmentUrl';
 import { putBlob, getBlob, rekeyBlob } from '../utils/blobCache';
 import { AttachmentImage } from './AttachmentImage';
 import { AttachmentAlbum } from './AttachmentAlbum';
+import { AttachmentVideo } from './AttachmentVideo';
 import { AttachmentFileCard, formatFileSize } from './AttachmentFileCard';
 import { ImageLightbox } from './ImageLightbox';
 
@@ -192,10 +201,11 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
                 chatUpdateUploadProgress(clientMsgId, agg);
               },
             });
-            rekeyBlob(att.uploadId, uploadId);
             return { ...att, uploadId };
           }),
         );
+        // Only once every upload succeeded: a retry needs the temp blobs.
+        real.forEach((att, i) => rekeyBlob(attachments[i].uploadId, att.uploadId));
         chatSetAttachments(clientMsgId, real);
         chatUpdateUploadProgress(clientMsgId, 1);
         onSend(msgText, clientMsgId, real);
@@ -218,20 +228,20 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
           const uploadId = `${TEMP_UPLOAD_PREFIX}${clientMsgId}:${i}`;
           putBlob(uploadId, file);
           const kind: AttachmentKind = file.type.startsWith('image/') ? 'image' : 'file';
-          if (kind === 'image') {
-            const meta = await imageMeta(file);
-            return {
-              uploadId,
-              kind,
-              name: file.name,
-              mime: file.type,
-              size: file.size,
-              width: meta?.width,
-              height: meta?.height,
-              blurThumb: meta?.blurThumb,
-            };
-          }
-          return { uploadId, kind, name: file.name, mime: file.type, size: file.size };
+          const att: Attachment = {
+            uploadId,
+            kind,
+            name: file.name,
+            mime: file.type || 'application/octet-stream',
+            size: file.size,
+          };
+          const meta =
+            kind === 'image'
+              ? await imageMeta(file)
+              : isInlineVideo(att.mime)
+                ? await videoMeta(file)
+                : null;
+          return meta ? { ...att, ...meta } : att;
         }),
       );
 
@@ -269,13 +279,12 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
   );
 
   const handleSend = useCallback(() => {
-    const trimmed = text.trim();
-    if ((!trimmed && files.length === 0) || overLimit || !selfPeerId) return;
+    if (!canSend) return;
     setText('');
     setFiles([]);
     setFileError(null);
-    void sendMessage(trimmed, files);
-  }, [text, files, overLimit, selfPeerId, sendMessage]);
+    void sendMessage(text.trim(), files);
+  }, [text, files, canSend, sendMessage]);
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -332,7 +341,7 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
         (prev.senderClientId !== undefined && msg.senderClientId !== undefined
           ? prev.senderClientId === msg.senderClientId
           : prev.from === msg.from);
-      const showName = !(sameSender && prev !== null && msg.ts - prev.ts < 5 * 60_000);
+      const showName = !(sameSender && msg.ts - prev.ts < 5 * 60_000);
       const isSelf =
         msg.senderClientId !== undefined
           ? msg.senderClientId === selfClientId
@@ -343,10 +352,14 @@ export function ChatPanel({ roomId, onSend, onDelete }: Props) {
     });
   }, [messages, participants, selfClientId, selfPeerId]);
 
-  // Flat list of every image in the visible chat, so the lightbox pages across
-  // all of them with ←/→ regardless of which message they belong to.
+  // Flat list of every image and playable video in the visible chat, so the
+  // lightbox pages across all of them with ←/→ regardless of which message
+  // they belong to.
   const imageList = useMemo<Attachment[]>(
-    () => visible.flatMap((v) => (v.msg.attachments ?? []).filter((a) => a.kind === 'image')),
+    () =>
+      visible.flatMap((v) =>
+        (v.msg.attachments ?? []).filter((a) => a.kind === 'image' || isInlineVideo(a.mime)),
+      ),
     [visible],
   );
   const imageListRef = useRef(imageList);
@@ -546,6 +559,23 @@ const TrayItem = memo(function TrayItem({ file, onRemove }: { file: File; onRemo
   );
 });
 
+function DownloadAll({ attachments, roomId }: { attachments: Attachment[]; roomId: string }) {
+  const { state, start } = useDownload(attachments, roomId);
+  return (
+    <button
+      type="button"
+      disabled={state === 'busy'}
+      onClick={start}
+      className="flex items-center gap-1 self-start text-[11px] text-muted-2 transition-colors hover:text-accent disabled:opacity-60"
+    >
+      <Download size={14} />
+      {state === 'failed'
+        ? 'Не удалось скачать · повторить'
+        : `Скачать все (${attachments.length})`}
+    </button>
+  );
+}
+
 const MessageRow = memo(function MessageRow({
   row,
   roomId,
@@ -562,7 +592,7 @@ const MessageRow = memo(function MessageRow({
   const { msg, isSelf, senderName, showName, renderedText } = row;
   const attachments = msg.attachments ?? [];
   const images = attachments.filter((a) => a.kind === 'image');
-  const fileCards = attachments.filter((a) => a.kind === 'file');
+  const files = attachments.filter((a) => a.kind === 'file');
   const uploading =
     msg.pending && !msg.uploadFailed && msg.uploadProgress !== undefined && msg.uploadProgress < 1;
   // Only confirmed own messages (server id assigned) can be retracted.
@@ -593,9 +623,21 @@ const MessageRow = memo(function MessageRow({
           {images.length > 1 && (
             <AttachmentAlbum images={images} roomId={roomId} onOpen={onImageClick} />
           )}
-          {fileCards.map((att) => (
-            <AttachmentFileCard key={att.uploadId} attachment={att} roomId={roomId} />
-          ))}
+          {files.map((att) =>
+            isInlineVideo(att.mime) ? (
+              <AttachmentVideo
+                key={att.uploadId}
+                attachment={att}
+                roomId={roomId}
+                onClick={() => onImageClick(att)}
+              />
+            ) : (
+              <AttachmentFileCard key={att.uploadId} attachment={att} roomId={roomId} />
+            ),
+          )}
+          {attachments.length > 1 && !msg.pending && (
+            <DownloadAll attachments={attachments} roomId={roomId} />
+          )}
         </div>
       )}
 

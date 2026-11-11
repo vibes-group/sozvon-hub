@@ -8,21 +8,29 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend ./
 RUN --mount=type=cache,target=/root/.npm npm run build
 
-FROM golang:1.27-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c AS build
+FROM rust:1.99-trixie@sha256:53766005847cbe02c3f59bfa49c1c4bb16695f2c9e5829c3d576a15406f5e733 AS chef
 
 WORKDIR /src
 
-COPY backend/go.mod backend/go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
+# cook and build share this toolchain; the recipe does not carry it.
+COPY backend/rust-toolchain.toml ./
+RUN cargo install cargo-chef --version 0.1.78 --locked
+
+FROM chef AS planner
 
 COPY backend ./
+RUN cargo chef prepare --recipe-path recipe.json
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux \
-    go build -ldflags="-s -w" -o /out/sozvon-hub-app ./cmd/server
+FROM chef AS build
+
+COPY --from=planner /src/recipe.json ./
+RUN cargo chef cook --release --locked --bin sozvon-hub-app --recipe-path recipe.json
+
+COPY backend ./
+# Changes on every commit and lands in the CI layer cache: keep target out of it.
+RUN cargo build --release --locked --bin sozvon-hub-app \
+ && cp target/release/sozvon-hub-app /out-sozvon-hub-app \
+ && rm -rf target
 
 FROM debian:13-slim@sha256:89c1ea91e897f0fe0a3731595330bc45b8bdef4047464a07116f891a94054b31
 
@@ -34,9 +42,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=build /out/sozvon-hub-app /app/sozvon-hub-app
+COPY --from=build /out-sozvon-hub-app /app/sozvon-hub-app
 COPY --from=frontend /src/frontend/dist /app/web
 
+# SQLite database, TURN secret and transient uploads. Mounted as a volume.
 RUN mkdir -p /app/data && chown app:app /app/data
 
 ENV APP_ADDR=:8080

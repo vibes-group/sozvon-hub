@@ -17,15 +17,9 @@
   --color-muted: #9aa8a2;
   --color-muted-2: #6b7872;
   --color-accent: #4be277;
-  --color-accent-hover: #6bff8f;
-  --color-accent-strong: #22c55e;
   --color-accent-ink: #050505;
   --color-good: #4be277;
   --color-danger: #f87171;
-
-  --radius-card: 0;
-  --radius-card-lg: 0;
-  --shadow-card: 0 0 0 0 transparent;
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
@@ -196,7 +190,7 @@
   .vh-toggle:hover {
     border-color: var(--color-accent);
   }
-  .vh-toggle[data-checked='true']:hover {
+  .vh-toggle[aria-checked='true']:hover {
     filter: brightness(1.2);
   }
   .vh-toggle-dot {
@@ -204,11 +198,11 @@
       transition-[transform,background] duration-150;
     top: calc(50% - 8px);
   }
-  .vh-toggle[data-checked='true'] {
+  .vh-toggle[aria-checked='true'] {
     background-color: var(--color-accent);
     border-color: var(--color-accent);
   }
-  .vh-toggle[data-checked='true'] .vh-toggle-dot {
+  .vh-toggle[aria-checked='true'] .vh-toggle-dot {
     transform: translateX(24px);
     background-color: var(--color-bg-0);
   }

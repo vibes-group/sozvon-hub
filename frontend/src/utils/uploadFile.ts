@@ -16,7 +16,7 @@ export class UploadError extends Error {
   }
 }
 
-export type UploadOptions = {
+type UploadOptions = {
   name: string;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
@@ -100,6 +100,41 @@ export async function imageMeta(file: Blob): Promise<ImageMeta | null> {
     return { width: bitmap.width, height: bitmap.height, blurThumb };
   } finally {
     bitmap.close();
+  }
+}
+
+// Bounds the wait before the message shows up; past it the video is sent
+// without a thumbnail.
+const VIDEO_FRAME_TIMEOUT_MS = 2000;
+
+/**
+ * Same hints for a video, with the thumbnail taken from its first frame.
+ * Returns null if the browser can't read its dimensions.
+ */
+export async function videoMeta(file: Blob): Promise<ImageMeta | null> {
+  const video = document.createElement('video');
+  const url = URL.createObjectURL(file);
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  try {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, VIDEO_FRAME_TIMEOUT_MS);
+      video.onloadeddata = video.onerror = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      video.src = url;
+    });
+    if (!video.videoWidth || !video.videoHeight) return null;
+    const hasFrame = video.readyState >= video.HAVE_CURRENT_DATA;
+    // The thumbnail is optional: a failed frame grab must not fail the send.
+    const blurThumb = hasFrame ? await generateBlurThumb(video).catch(() => '') : '';
+    return { width: video.videoWidth, height: video.videoHeight, blurThumb };
+  } finally {
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(url);
   }
 }
 

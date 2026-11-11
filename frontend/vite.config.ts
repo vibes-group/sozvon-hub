@@ -25,9 +25,8 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: null,
-        // The RNNoise worklet (~4.8 MB) is loaded on demand via
-        // AudioWorklet.addModule — never precache it into the SW.
-        globIgnores: ["**/vendor/rnnoise/**"],
+        // Denoiser wasm (~3.6 MB) loads on demand; never precache it into the SW.
+        globIgnores: ["**/*.wasm"],
       },
     }),
   ],

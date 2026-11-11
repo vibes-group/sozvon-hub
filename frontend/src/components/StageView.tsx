@@ -235,27 +235,21 @@ function StageRemoteScreen({ publisherId }: { publisherId: string }) {
 
   const qualityLabel = videoSize ? `${videoSize.w}×${videoSize.h}` : null;
   const fpsLabel = fps !== null ? `${Math.round(fps)}fps` : null;
+  const badges = [videoCodec?.toUpperCase(), qualityLabel, fpsLabel].filter(Boolean);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-black">
       <div className="flex items-center justify-between gap-2 py-2 pl-3 pr-12 pointer-coarse:pr-14 text-zinc-200">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <span className="truncate">Экран · {display}</span>
-          {videoCodec && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
-              {videoCodec.toUpperCase()}
+          {badges.map((b) => (
+            <span
+              key={b}
+              className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden"
+            >
+              {b}
             </span>
-          )}
-          {qualityLabel && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
-              {qualityLabel}
-            </span>
-          )}
-          {fpsLabel && (
-            <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-xs font-normal text-zinc-400 max-sm:hidden">
-              {fpsLabel}
-            </span>
-          )}
+          ))}
         </span>
         {hasSystemAudio && shareLive && (
           <div className="flex shrink-0 items-center gap-2">

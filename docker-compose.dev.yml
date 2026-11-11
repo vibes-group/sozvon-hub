@@ -13,14 +13,16 @@ services:
       APP_COOKIE_SECURE: "false"
       APP_BOOTSTRAP_INVITE: "true"
       APP_DB_PATH: "/app/data/sozvon-hub.db"
-      # localhost works with host ICE candidates only. To test calls across
-      # devices on your LAN, set PUBLIC_IP to this machine's LAN IP and map the
-      # UDP ports below.
+      # Without PUBLIC_IP the SFU advertises 127.0.0.1 and TURN is off. To test
+      # calls across devices on your LAN, set PUBLIC_IP to this machine's LAN
+      # IP and bind the UDP ports below on it instead of 127.0.0.1.
       # PUBLIC_IP: "192.168.1.10"
     volumes:
       - app_data:/app/data
+    # The UDP range follows UDP_PORT_MIN/MAX defaults in backend/src/config.rs.
     ports:
       - "127.0.0.1:8080:8080"
+      - "127.0.0.1:10101-10200:10101-10200/udp"
 
 volumes:
   app_data:

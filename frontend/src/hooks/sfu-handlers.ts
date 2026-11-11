@@ -1,25 +1,49 @@
 import type { MutableRefObject } from 'react';
 import { useStore } from '../store/useStore';
-import { useScreenShareStore } from '../store/useScreenShareStore';
+import { useScreenShareStore, type ScreenShare } from '../store/useScreenShareStore';
 import { useCameraStore } from '../store/useCameraStore';
 import type { useAudioEngine } from './useAudioEngine';
 import type { useSFU } from './useSFU';
 import { loadPeerVolume } from '../utils/storage';
-import type { ChatPayload, ChatDeletedPayload } from '../sfu/protocol';
+import type { ChatPayload, ChatDeletedPayload, PeerInfo } from '../sfu/protocol';
 import type { SFUHandlers } from '../sfu/client';
 import { screenShareErrorRu } from '../screenshare/errors';
-import { createReconnectScheduler } from '../utils/reconnect';
+import type { ReconnectScheduler } from '../utils/reconnect';
+import type { ParticipantUI } from '../types';
+
+// Roster entry for a remote peer from welcome / peer-joined, restoring our
+// saved volume for them by clientId.
+function upsertRemotePeer(p: PeerInfo): void {
+  const stored = p.clientId ? loadPeerVolume(p.clientId) : null;
+  useStore.getState().upsertParticipant({
+    id: p.id,
+    display: p.displayName ?? `peer-${p.id}`,
+    clientId: p.clientId,
+    remoteMuted: p.selfMuted ?? false,
+    remoteDeafened: p.deafened ?? false,
+    screenSharing: p.screenSharing ?? false,
+    cameraOn: p.cameraOn ?? false,
+    ...(stored !== null ? { localVolume: stored } : {}),
+  });
+}
+
+function shareOf(p: PeerInfo): ScreenShare {
+  return {
+    publisherId: p.id,
+    hasSystemAudio: p.screenSharingHasAudio ?? false,
+    videoCodec: p.screenSharingVideoCodec,
+  };
+}
 
 type SFUHandlerDeps = {
   display: string;
   audio: ReturnType<typeof useAudioEngine>;
   sfu: ReturnType<typeof useSFU>;
-  getStore: typeof useStore.getState;
   handleChatReceive: (data: ChatPayload) => void;
   handleChatDelete: (data: ChatDeletedPayload) => void;
   peerIdRef: MutableRefObject<string | null>;
   clientIdRef: MutableRefObject<string>;
-  reconnectSchedulerRef: MutableRefObject<ReturnType<typeof createReconnectScheduler>>;
+  reconnectSchedulerRef: MutableRefObject<ReconnectScheduler>;
   userLeavingRef: MutableRefObject<boolean>;
 };
 
@@ -28,7 +52,6 @@ export function buildSFUHandlers(deps: SFUHandlerDeps): Partial<SFUHandlers> {
     display,
     audio,
     sfu,
-    getStore,
     handleChatReceive,
     handleChatDelete,
     peerIdRef,
@@ -36,10 +59,17 @@ export function buildSFUHandlers(deps: SFUHandlerDeps): Partial<SFUHandlers> {
     reconnectSchedulerRef,
     userLeavingRef,
   } = deps;
+  const getStore = useStore.getState;
 
   function subscribeCamera(publisherId: string): void {
     if (publisherId === peerIdRef.current) return;
     sfu.getClient()?.subscribeCamera(publisherId);
+  }
+
+  function addPeer(p: PeerInfo): void {
+    upsertRemotePeer(p);
+    if (p.screenSharing) useScreenShareStore.getState().upsertShare(shareOf(p));
+    if (p.cameraOn) subscribeCamera(p.id);
   }
 
   return {
@@ -48,7 +78,7 @@ export function buildSFUHandlers(deps: SFUHandlerDeps): Partial<SFUHandlers> {
         reconnectSchedulerRef.current.reset();
         getStore().setStatus('Подключено', false, true);
       } else if (s === 'failed' || s === 'closed') {
-        if (useStore.getState().joinState === 'joined' && !userLeavingRef.current) {
+        if (getStore().joinState === 'joined' && !userLeavingRef.current) {
           const nextAttempt = reconnectSchedulerRef.current.attemptIndex + 1;
           getStore().setStatus(
             `Соединение оборвалось, переподключаюсь (попытка ${nextAttempt})…`,
@@ -68,96 +98,28 @@ export function buildSFUHandlers(deps: SFUHandlerDeps): Partial<SFUHandlers> {
         isSelf: true,
         clientId: clientIdRef.current,
       });
-      const share = useScreenShareStore.getState();
-      share.clearShares();
+      useScreenShareStore.getState().clearShares();
       useCameraStore.getState().clearRemote();
-      for (const p of peers ?? []) {
-        const stored = p.clientId ? loadPeerVolume(p.clientId) : null;
-        getStore().upsertParticipant({
-          id: p.id,
-          display: p.displayName ?? `peer-${p.id}`,
-          clientId: p.clientId,
-          remoteMuted: p.selfMuted ?? false,
-          remoteDeafened: p.deafened ?? false,
-          screenSharing: p.screenSharing ?? false,
-          cameraOn: p.cameraOn ?? false,
-          ...(stored !== null ? { localVolume: stored } : {}),
-        });
-        if (p.screenSharing) {
-          share.upsertShare({
-            publisherId: p.id,
-            hasSystemAudio: p.screenSharingHasAudio ?? false,
-            videoCodec: p.screenSharingVideoCodec,
-          });
-        }
-        if (p.cameraOn) subscribeCamera(p.id);
-      }
+      for (const p of peers ?? []) addPeer(p);
     },
-    onPeerJoined: ({
-      id,
-      displayName: peerDisplay,
-      clientId,
-      selfMuted,
-      deafened,
-      screenSharing,
-      screenSharingHasAudio,
-      screenSharingVideoCodec,
-      cameraOn,
-    }) => {
-      const stored = clientId ? loadPeerVolume(clientId) : null;
-      getStore().upsertParticipant({
-        id,
-        display: peerDisplay ?? `peer-${id}`,
-        clientId,
-        remoteMuted: selfMuted ?? false,
-        remoteDeafened: deafened ?? false,
-        screenSharing: screenSharing ?? false,
-        cameraOn: cameraOn ?? false,
-        ...(stored !== null ? { localVolume: stored } : {}),
-      });
-      if (screenSharing) {
-        useScreenShareStore.getState().upsertShare({
-          publisherId: id,
-          hasSystemAudio: screenSharingHasAudio ?? false,
-          videoCodec: screenSharingVideoCodec,
-        });
-      }
-      if (cameraOn) subscribeCamera(id);
-    },
+    onPeerJoined: addPeer,
     onPeerLeft: ({ id }) => {
       audio.detachRemoteStream(id);
       getStore().removeParticipant(id);
       useScreenShareStore.getState().removeShare(id);
       useCameraStore.getState().removeRemote(id);
     },
-    onPeerInfo: ({
-      id,
-      displayName: peerDisplay,
-      clientId,
-      screenSharing,
-      screenSharingHasAudio,
-      screenSharingVideoCodec,
-      cameraOn,
-    }) => {
-      const patch: {
-        display?: string;
-        clientId?: string;
-        screenSharing?: boolean;
-        cameraOn?: boolean;
-      } = { screenSharing: Boolean(screenSharing), cameraOn: Boolean(cameraOn) };
-      if (peerDisplay) patch.display = peerDisplay;
-      if (clientId) patch.clientId = clientId;
-      getStore().updateParticipant(id, patch);
+    onPeerInfo: (p) => {
+      const patch: Partial<ParticipantUI> = {
+        screenSharing: Boolean(p.screenSharing),
+        cameraOn: Boolean(p.cameraOn),
+      };
+      if (p.displayName) patch.display = p.displayName;
+      if (p.clientId) patch.clientId = p.clientId;
+      getStore().updateParticipant(p.id, patch);
       const share = useScreenShareStore.getState();
-      if (screenSharing) {
-        share.upsertShare({
-          publisherId: id,
-          hasSystemAudio: screenSharingHasAudio ?? false,
-          videoCodec: screenSharingVideoCodec,
-        });
-      } else {
-        share.removeShare(id);
-      }
+      if (p.screenSharing) share.upsertShare(shareOf(p));
+      else share.removeShare(p.id);
     },
     onPeerState: ({ id, selfMuted, deafened }) => {
       getStore().updateParticipant(id, { remoteMuted: selfMuted, remoteDeafened: deafened });
@@ -165,11 +127,15 @@ export function buildSFUHandlers(deps: SFUHandlerDeps): Partial<SFUHandlers> {
     onChat: handleChatReceive,
     onChatDeleted: handleChatDelete,
     onTrack: ({ track, stream, peerId }) => {
-      if (!peerId) return;
       if (track.kind === 'audio') {
         getStore().upsertParticipant({ id: peerId, hasStream: true });
         audio.attachRemoteStream(peerId, stream);
       }
+    },
+    onTrackRemoved: ({ peerId }) => {
+      audio.detachRemoteStream(peerId);
+      if (getStore().participants[peerId])
+        getStore().updateParticipant(peerId, { hasStream: false });
     },
     onScreenShareAvailable: ({ publisherId, hasSystemAudio, videoCodec }) => {
       useScreenShareStore.getState().upsertShare({ publisherId, hasSystemAudio, videoCodec });

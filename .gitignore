@@ -17,3 +17,5 @@ dist/
 *.tsbuildinfo
 scratch
 docker-compose.override.yml
+backend/target/
+!backend/src/bin/

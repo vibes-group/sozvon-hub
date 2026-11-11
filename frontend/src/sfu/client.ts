@@ -12,23 +12,18 @@ import {
   type ScreenShareAvailablePayload,
   type ScreenShareEndedPayload,
   type ScreenShareErrorPayload,
-  type CameraAvailablePayload,
-  type CameraEndedPayload,
+  type CameraPublisherPayload,
   type ScreenVideoCodec,
+  type ClientMessage,
+  isScreenVideoCodec,
 } from './protocol';
-export type {
-  ChatOnlyHandlers,
-  ChatOnlyConnectOptions,
-  ChatOnlyClient,
-} from './chat-client';
+export type { ChatOnlyHandlers, ChatOnlyConnectOptions, ChatOnlyClient } from './chat-client';
 export { createChatClient } from './chat-client';
 import { closeWebSocket } from './chat-client';
 import {
   applyScreenCodecPreferences,
   canReceiveScreenCodec,
   chooseScreenCodec,
-  isScreenVideoCodec,
-  primeScreenCodecProfile,
 } from '../screenshare/codec';
 import {
   getCurrentScreenCodecPref,
@@ -41,8 +36,8 @@ import { buildScreenParams, shareModeToContentHint } from '../screenshare/params
 
 export const SCREEN_SHARE_NO_CODEC = 'SCREEN_SHARE_NO_CODEC';
 
-// Camera uses a single VP8 layer (chosen for universal support; documented in
-// SPEC.md). 1.5 Mbps is plenty for a small-call camera tile.
+// Camera is a single VP8 layer (every browser encodes it); 1.5 Mbps is plenty
+// for a camera tile.
 const CAMERA_MAX_BITRATE = 1_500_000;
 
 export type SFUHandlers = {
@@ -55,7 +50,10 @@ export type SFUHandlers = {
   onChat: (data: ChatPayload) => void;
   onChatDeleted: (data: ChatDeletedPayload) => void;
   onPing: (data: PingPayload) => void;
-  onTrack: (data: { track: MediaStreamTrack; stream: MediaStream; peerId: string | null }) => void;
+  /** A peer's voice is now on `stream`. */
+  onTrack: (data: { track: MediaStreamTrack; stream: MediaStream; peerId: string }) => void;
+  /** The stream last given for `peerId` no longer carries its voice. */
+  onTrackRemoved: (data: { peerId: string }) => void;
   onScreenShareAvailable: (data: ScreenShareAvailablePayload) => void;
   onScreenShareEnded: (data: ScreenShareEndedPayload) => void;
   onScreenShareError: (data: ScreenShareErrorPayload) => void;
@@ -68,8 +66,8 @@ export type SFUHandlers = {
   onScreenShareSelfStarted: (data: { stream: MediaStream; videoCodec: ScreenVideoCodec }) => void;
   onScreenShareSelfStopped: () => void;
   onScreenShareSystemAudioWarning: (data: { reason: 'monitor-feedback-risk' }) => void;
-  onCameraAvailable: (data: CameraAvailablePayload) => void;
-  onCameraEnded: (data: CameraEndedPayload) => void;
+  onCameraAvailable: (data: CameraPublisherPayload) => void;
+  onCameraEnded: (data: CameraPublisherPayload) => void;
   onCameraTrack: (data: { publisherId: string; track: MediaStreamTrack; stream: MediaStream }) => void;
   onCameraSelfStarted: (data: { stream: MediaStream }) => void;
   onCameraSelfStopped: () => void;
@@ -107,7 +105,6 @@ export type SFUClient = {
   releaseCameraTrack(): void;
   replaceCameraTrack(stream: MediaStream): Promise<void>;
   subscribeCamera(publisherId: string): void;
-  unsubscribeCamera(publisherId: string): void;
   isPublishingCamera(): boolean;
 };
 
@@ -115,35 +112,28 @@ function isFullLayerSet(layers: number[]): boolean {
   return layers.length === 3 && layers.includes(0) && layers.includes(1) && layers.includes(2);
 }
 
-function noop(): void {}
+// Patches encodings[0]; getParameters() has no encodings before the first
+// negotiation completes. Never rejects.
+async function setEncoding(
+  sender: RTCRtpSender,
+  patch: RTCRtpEncodingParameters & { scalabilityMode?: string },
+  what: string,
+): Promise<void> {
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) params.encodings = [{}];
+    params.encodings[0] = { ...params.encodings[0], ...patch };
+    await sender.setParameters(params);
+  } catch (err) {
+    console.warn('[sfu] setParameters(%s) failed', what, err);
+  }
+}
 
-export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient {
-  const on: SFUHandlers = {
-    onState: handlers.onState ?? noop,
-    onWelcome: handlers.onWelcome ?? noop,
-    onPeerJoined: handlers.onPeerJoined ?? noop,
-    onPeerLeft: handlers.onPeerLeft ?? noop,
-    onPeerInfo: handlers.onPeerInfo ?? noop,
-    onPeerState: handlers.onPeerState ?? noop,
-    onChat: handlers.onChat ?? noop,
-    onChatDeleted: handlers.onChatDeleted ?? noop,
-    onPing: handlers.onPing ?? noop,
-    onTrack: handlers.onTrack ?? noop,
-    onScreenShareAvailable: handlers.onScreenShareAvailable ?? noop,
-    onScreenShareEnded: handlers.onScreenShareEnded ?? noop,
-    onScreenShareError: handlers.onScreenShareError ?? noop,
-    onScreenShareTrack: handlers.onScreenShareTrack ?? noop,
-    onScreenShareSelfStarted: handlers.onScreenShareSelfStarted ?? noop,
-    onScreenShareSelfStopped: handlers.onScreenShareSelfStopped ?? noop,
-    onScreenShareSystemAudioWarning: handlers.onScreenShareSystemAudioWarning ?? noop,
-    onCameraAvailable: handlers.onCameraAvailable ?? noop,
-    onCameraEnded: handlers.onCameraEnded ?? noop,
-    onCameraTrack: handlers.onCameraTrack ?? noop,
-    onCameraSelfStarted: handlers.onCameraSelfStarted ?? noop,
-    onCameraSelfStopped: handlers.onCameraSelfStopped ?? noop,
-    onError: handlers.onError ?? noop,
-  };
+function candidateInit(candidate: RTCIceCandidate): RTCIceCandidateInit {
+  return candidate.toJSON ? candidate.toJSON() : candidate;
+}
 
+export function createSFUClient(on: Partial<SFUHandlers> = {}): SFUClient {
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
   let stopped = false;
@@ -152,7 +142,6 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   let selfPeerId: string | null = null;
   let screenPubPC: RTCPeerConnection | null = null;
   let screenPubStream: MediaStream | null = null;
-  let screenPubStopped = false;
   let screenPubToken: string | null = null;
   let screenPubVideoSender: RTCRtpSender | null = null;
   let screenPubInitialParams: Promise<void> | null = null;
@@ -169,39 +158,66 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   let cameraPubPC: RTCPeerConnection | null = null;
   let cameraPubStream: MediaStream | null = null;
   let cameraVideoSender: RTCRtpSender | null = null;
-  let cameraPubStopped = false;
   const cameraSubs = new Map<string, RTCPeerConnection>();
 
-  void primeScreenCodecProfile();
-
-  // Returns whether the frame was actually written — callers that need delivery
-  // feedback (e.g. chat-delete) check this; a closed socket is a no-op.
-  function send(event: string, data: unknown): boolean {
+  // Returns whether the frame was actually written; a closed socket is a no-op.
+  function send<E extends ClientMessage['event']>(
+    event: E,
+    data: Extract<ClientMessage, { event: E }>['data'],
+  ): boolean {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify({ event, data }));
     return true;
   }
 
+  function settleResume(err?: Error): boolean {
+    const cont = resumeContinuation;
+    resumeContinuation = null;
+    if (!cont) return false;
+    if (err) cont.reject(err);
+    else cont.resolve();
+    return true;
+  }
+
+  // Incoming voices ride on fixed "slot" streams (msid stream id = slot);
+  // audio-slots says whose voice each slot carries. Either can arrive first.
+  const slotOwners = new Map<string, string | null>();
+  const slotMedia = new Map<string, { track: MediaStreamTrack; stream: MediaStream }>();
+
+  function bindSlot(slot: string): void {
+    const peerId = slotOwners.get(slot);
+    const media = slotMedia.get(slot);
+    if (peerId && media) on.onTrack?.({ ...media, peerId });
+  }
+
+  function assignSlots(slots: { slot: string; peerId: string | null }[]): void {
+    for (const { slot, peerId } of slots) {
+      const prev = slotOwners.get(slot) ?? null;
+      if (prev === peerId) continue;
+      slotOwners.set(slot, peerId);
+      if (prev) on.onTrackRemoved?.({ peerId: prev });
+      bindSlot(slot);
+    }
+  }
+
   function setupAudioAndWS(opts: ConnectOptions): Promise<void> {
     pc = new RTCPeerConnection({ iceServers });
+    slotOwners.clear();
+    slotMedia.clear();
 
     pc.ontrack = (event) => {
-      const stream = event.streams?.[0] ?? null;
-      const peerId = stream ? stream.id : null;
-      if (stream) {
-        on.onTrack({ track: event.track, stream, peerId });
-      }
+      const stream = event.streams?.[0];
+      if (!stream) return;
+      slotMedia.set(stream.id, { track: event.track, stream });
+      bindSlot(stream.id);
     };
 
     pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      const cand = event.candidate.toJSON ? event.candidate.toJSON() : event.candidate;
-      send('candidate', { pc: 'audio', ...cand });
+      if (event.candidate) send('candidate', { pc: 'audio', ...candidateInit(event.candidate) });
     };
 
     pc.onconnectionstatechange = () => {
-      if (!pc) return;
-      on.onState(pc.connectionState);
+      if (pc) on.onState?.(pc.connectionState);
     };
 
     for (const track of opts.localStream.getTracks()) {
@@ -221,7 +237,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
       ws = socket;
 
       socket.onopen = () => {
-        on.onState('connecting');
+        on.onState?.('connecting');
         socket.send(
           JSON.stringify({
             event: 'hello',
@@ -231,7 +247,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
       };
 
       socket.onerror = (event) => {
-        on.onError(event);
+        on.onError?.(event);
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
@@ -240,7 +256,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
       };
 
       socket.onclose = () => {
-        if (!stopped) on.onState('closed');
+        if (!stopped) on.onState?.('closed');
       };
 
       socket.onmessage = async (event) => {
@@ -249,7 +265,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
         try {
           await handleServerMessage(msg);
         } catch (err) {
-          on.onError(err);
+          on.onError?.(err);
         }
         if (msg.event === 'welcome' && !resolved) {
           resolved = true;
@@ -280,14 +296,17 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
             screenShareCodecs.set(peer.id, peer.screenSharingVideoCodec);
           }
         }
-        on.onWelcome(msg.data);
+        on.onWelcome?.(msg.data);
         break;
       case 'peer-joined':
-        on.onPeerJoined(msg.data);
+        on.onPeerJoined?.(msg.data);
         break;
       case 'peer-left':
         screenShareCodecs.delete(msg.data.id);
-        on.onPeerLeft(msg.data);
+        on.onPeerLeft?.(msg.data);
+        break;
+      case 'audio-slots':
+        assignSlots(msg.data.slots);
         break;
       case 'peer-info':
         if (msg.data.screenSharing && isScreenVideoCodec(msg.data.screenSharingVideoCodec)) {
@@ -295,19 +314,19 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
         } else if (!msg.data.screenSharing) {
           screenShareCodecs.delete(msg.data.id);
         }
-        on.onPeerInfo(msg.data);
+        on.onPeerInfo?.(msg.data);
         break;
       case 'peer-state':
-        on.onPeerState(msg.data);
+        on.onPeerState?.(msg.data);
         break;
       case 'chat':
-        on.onChat(msg.data);
+        on.onChat?.(msg.data);
         break;
       case 'chat-deleted':
-        on.onChatDeleted(msg.data);
+        on.onChatDeleted?.(msg.data);
         break;
       case 'ping':
-        on.onPing(msg.data);
+        on.onPing?.(msg.data);
         break;
       case 'offer':
         await handleOffer(msg.data);
@@ -320,67 +339,52 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
         break;
       case 'screen-share-started':
         screenPubToken = msg.data.sessionToken;
-        if (resumeContinuation) {
-          const cont = resumeContinuation;
-          resumeContinuation = null;
-          cont.resolve();
-        }
+        settleResume();
         break;
       case 'screen-share-available':
         if (isScreenVideoCodec(msg.data.videoCodec)) {
           screenShareCodecs.set(msg.data.publisherId, msg.data.videoCodec);
         }
-        on.onScreenShareAvailable(msg.data);
+        on.onScreenShareAvailable?.(msg.data);
         break;
       case 'screen-share-ended':
-        // Tear down our local subscriber PC for that publisher, if any.
         screenShareCodecs.delete(msg.data.publisherId);
         teardownScreenSub(msg.data.publisherId);
-        on.onScreenShareEnded(msg.data);
+        on.onScreenShareEnded?.(msg.data);
         // The server ended our current share: drop the local publisher too, or
         // the next start throws "already publishing". A share without a token
         // yet is a new one — the ended is the echo of our own earlier stop.
         if (msg.data.publisherId === selfPeerId && screenPubToken) stopScreenShare();
         break;
-      case 'screen-share-error':
-        // Best-effort cleanup of the relevant local state. The handler may
-        // also revert UI state.
+      case 'screen-share-error': {
         if (msg.data.publisherId) teardownScreenSub(msg.data.publisherId);
-        if (resumeContinuation) {
-          const cont = resumeContinuation;
-          resumeContinuation = null;
-          cont.reject(new Error(`screen-share-error: ${msg.data.reason}`));
-        } else if (!msg.data.publisherId) {
-          // Our start was rejected; the UI resets to idle, so must we.
-          stopScreenShare();
-        }
-        on.onScreenShareError(msg.data);
+        const resumeFailed = settleResume(new Error(`screen-share-error: ${msg.data.reason}`));
+        // Our start was rejected; the UI resets to idle, so must we.
+        if (!resumeFailed && !msg.data.publisherId) stopScreenShare();
+        on.onScreenShareError?.(msg.data);
         break;
+      }
       case 'screen-share-encode-pause':
-        if (!isFullLayerSet(msg.data.layers)) {
-          console.warn('[sfu] partial encode-pause not supported, layers=', msg.data.layers);
-          break;
-        }
-        void applyScreenEncodeActive(false);
-        break;
       case 'screen-share-encode-resume':
         if (!isFullLayerSet(msg.data.layers)) {
-          console.warn('[sfu] partial encode-resume not supported, layers=', msg.data.layers);
+          console.warn('[sfu] partial %s not supported, layers=', msg.event, msg.data.layers);
           break;
         }
-        void applyScreenEncodeActive(true);
+        void applyScreenEncodeActive(msg.event === 'screen-share-encode-resume');
         break;
       case 'camera-available':
-        on.onCameraAvailable(msg.data);
+        on.onCameraAvailable?.(msg.data);
         break;
       case 'camera-ended':
         teardownCameraSub(msg.data.publisherId);
-        on.onCameraEnded(msg.data);
+        on.onCameraEnded?.(msg.data);
         break;
     }
   }
 
-  async function handleOffer(data: Extract<ServerMessage, { event: 'offer' }>['data']): Promise<void> {
+  async function handleOffer(
+    data: Extract<ServerMessage, { event: 'offer' }>['data'],
+  ): Promise<void> {
     switch (data.pc) {
       case 'audio': {
         if (!pc) return;
@@ -390,57 +394,28 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
         send('answer', { pc: 'audio', type: answer.type, sdp: answer.sdp });
         return;
       }
-      case 'screen-sub': {
-        const publisherId = data.publisherId;
-        if (!publisherId) {
-          console.warn('[sfu] screen-sub offer without publisherId');
-          return;
-        }
-        const subPC = screenSubs.get(publisherId);
-        if (!subPC) {
-          console.warn(`[sfu] screen-sub offer for unknown publisher=${publisherId}`);
-          return;
-        }
-        await subPC.setRemoteDescription({ type: data.type, sdp: data.sdp });
-        const answer = await subPC.createAnswer();
-        await subPC.setLocalDescription(answer);
-        send('answer', {
-          pc: 'screen-sub',
-          publisherId,
-          type: answer.type,
-          sdp: answer.sdp,
-        });
-        return;
-      }
+      case 'screen-sub':
       case 'camera-sub': {
         const publisherId = data.publisherId;
         if (!publisherId) {
-          console.warn('[sfu] camera-sub offer without publisherId');
+          console.warn('[sfu] %s offer without publisherId', data.pc);
           return;
         }
-        const subPC = cameraSubs.get(publisherId);
+        const subPC = (data.pc === 'screen-sub' ? screenSubs : cameraSubs).get(publisherId);
         if (!subPC) {
-          console.warn(`[sfu] camera-sub offer for unknown publisher=${publisherId}`);
+          console.warn('[sfu] %s offer for unknown publisher=%s', data.pc, publisherId);
           return;
         }
         await subPC.setRemoteDescription({ type: data.type, sdp: data.sdp });
         const answer = await subPC.createAnswer();
         await subPC.setLocalDescription(answer);
-        send('answer', {
-          pc: 'camera-sub',
-          publisherId,
-          type: answer.type,
-          sdp: answer.sdp,
-        });
+        send('answer', { pc: data.pc, publisherId, type: answer.type, sdp: answer.sdp });
         return;
       }
       case 'screen-pub':
-        // SFU never offers to a screen-pub PC — it always answers.
-        console.warn('[sfu] unexpected offer with pc=screen-pub');
-        return;
       case 'camera-pub':
-        // SFU never offers to a camera-pub PC — it always answers.
-        console.warn('[sfu] unexpected offer with pc=camera-pub');
+        // SFU never offers to a publisher PC — it always answers.
+        console.warn('[sfu] unexpected offer with pc=%s', data.pc);
         return;
     }
   }
@@ -448,25 +423,17 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   async function handleAnswer(
     data: Extract<ServerMessage, { event: 'answer' }>['data'],
   ): Promise<void> {
-    // The SFU answers the publisher's screen-pub / camera-pub offer. Other pc
-    // kinds arriving as 'answer' are a protocol mistake; log and drop.
-    if (data.pc === 'screen-pub') {
-      if (!screenPubPC) {
-        console.warn('[sfu] screen-pub answer with no active publisher PC');
-        return;
-      }
-      await screenPubPC.setRemoteDescription({ type: data.type, sdp: data.sdp });
+    // Only our screen-pub / camera-pub offers get an answer from the SFU.
+    if (data.pc !== 'screen-pub' && data.pc !== 'camera-pub') {
+      console.warn('[sfu] unexpected answer with pc=%s', data.pc);
       return;
     }
-    if (data.pc === 'camera-pub') {
-      if (!cameraPubPC) {
-        console.warn('[sfu] camera-pub answer with no active publisher PC');
-        return;
-      }
-      await cameraPubPC.setRemoteDescription({ type: data.type, sdp: data.sdp });
+    const pubPC = data.pc === 'screen-pub' ? screenPubPC : cameraPubPC;
+    if (!pubPC) {
+      console.warn('[sfu] %s answer with no active publisher PC', data.pc);
       return;
     }
-    console.warn(`[sfu] unexpected answer with pc=${data.pc}`);
+    await pubPC.setRemoteDescription({ type: data.type, sdp: data.sdp });
   }
 
   async function handleCandidate(
@@ -483,20 +450,14 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
           if (!screenPubPC) return;
           await screenPubPC.addIceCandidate(cand);
           return;
-        case 'screen-sub': {
-          if (!publisherId) return;
-          const subPC = screenSubs.get(publisherId);
-          if (!subPC) return;
-          await subPC.addIceCandidate(cand);
-          return;
-        }
         case 'camera-pub':
           if (!cameraPubPC) return;
           await cameraPubPC.addIceCandidate(cand);
           return;
+        case 'screen-sub':
         case 'camera-sub': {
           if (!publisherId) return;
-          const subPC = cameraSubs.get(publisherId);
+          const subPC = (kind === 'screen-sub' ? screenSubs : cameraSubs).get(publisherId);
           if (!subPC) return;
           await subPC.addIceCandidate(cand);
           return;
@@ -544,18 +505,13 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     const settings = track?.getSettings();
     const actualW = settings?.width;
     const actualH = settings?.height;
-    if (!actualW || !actualH) {
-      constraints.height = { max: params.height };
-      return constraints;
-    }
-
     const maxPixels = params.width * params.height;
-    const actualPixels = actualW * actualH;
-    if (actualPixels <= maxPixels) {
+    if (!actualW || !actualH || actualW * actualH <= maxPixels) {
       constraints.height = { max: params.height };
       return constraints;
     }
 
+    const actualPixels = actualW * actualH;
     const scale = Math.sqrt(maxPixels / actualPixels);
     const maxW = Math.max(1, Math.floor(actualW * scale));
     const maxH = Math.max(1, Math.floor(actualH * scale));
@@ -575,26 +531,17 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     }
   }
 
-  async function applyScreenSenderParams(
+  function applyScreenSenderParams(
     sender: RTCRtpSender,
     track: MediaStreamTrack | undefined,
     params: ScreenParams,
   ): Promise<void> {
-    params = track ? tabSourceParams(params, track) : params;
-    const senderParams = sender.getParameters();
-    if (!senderParams.encodings || senderParams.encodings.length === 0) {
-      senderParams.encodings = [{}];
-    }
-    senderParams.encodings[0] = {
-      ...senderParams.encodings[0],
-      maxBitrate: scaledBitrate(track, params),
-      maxFramerate: params.fps,
-    } as RTCRtpEncodingParameters;
-    try {
-      await sender.setParameters(senderParams);
-    } catch (err) {
-      console.warn('[sfu] setParameters(update) on screen video failed', err);
-    }
+    params = tabSourceParams(params, track);
+    return setEncoding(
+      sender,
+      { maxBitrate: scaledBitrate(track, params), maxFramerate: params.fps },
+      'screen update',
+    );
   }
 
   function finishTabOrWindowMotionBootstrap(
@@ -608,7 +555,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     // motion. Starting as sharp/source first matches the manual recovery path;
     // restore motion after capture and the publisher sender have settled.
     window.setTimeout(() => {
-      if (screenPubStopped || screenPubVideoSender !== videoSender) return;
+      if (screenPubVideoSender !== videoSender) return;
       const current = getCurrentScreenParams();
       if (
         getCurrentShareMode() !== targetMode ||
@@ -656,25 +603,17 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
         settled = true;
         clearTimeout(t);
         newPC.removeEventListener('signalingstatechange', watcher);
-        try {
-          const effectiveParams = tabSourceParams(pickedParams, videoTrack);
-          const params = videoSender.getParameters();
-          if (!params.encodings || params.encodings.length === 0) {
-            params.encodings = [{}];
-          }
-          params.encodings[0] = {
-            ...params.encodings[0],
+        const effectiveParams = tabSourceParams(pickedParams, videoTrack);
+        screenPubInitialParams = setEncoding(
+          videoSender,
+          {
             ...(selectedCodec === 'av1' ? { scalabilityMode: 'L1T3' } : {}),
             maxBitrate: scaledBitrate(videoTrack, effectiveParams),
             maxFramerate: effectiveParams.fps,
             priority: 'high',
-          } as RTCRtpEncodingParameters;
-          screenPubInitialParams = videoSender.setParameters(params).catch((err: unknown) => {
-            console.warn('[sfu] setParameters on screen video failed', err);
-          });
-        } catch (err) {
-          console.warn('[sfu] setParameters on screen video failed', err);
-        }
+          },
+          'screen initial',
+        );
         resolve();
       };
       newPC.addEventListener('signalingstatechange', watcher);
@@ -695,6 +634,10 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     const bootstrapParams = buildScreenParams('source', pickedParams.fps, 'sharp');
 
     // Must stay sync from here to getDisplayMedia — any await breaks the gesture context.
+    // windowAudio: 'window' asks Chromium for per-window (per-process) audio
+    // on window surfaces, which avoids picking up the speaker mix and stops
+    // viewers from hearing themselves. Monitor shares still capture the full
+    // system mix — we warn the user in that case.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         frameRate: { ideal: pickedParams.fps, max: pickedParams.fps },
@@ -720,11 +663,13 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
       const pickedSurface = videoTrack.getSettings().displaySurface;
 
       if (pickedSurface === 'monitor' && stream.getAudioTracks().length > 0) {
-        on.onScreenShareSystemAudioWarning({ reason: 'monitor-feedback-risk' });
+        on.onScreenShareSystemAudioWarning?.({ reason: 'monitor-feedback-risk' });
       }
       const shouldBootstrapBrowserMotion =
         requestedMode === 'motion' && isTabOrWindowSurface(videoTrack);
-      videoTrack.contentHint = shouldBootstrapBrowserMotion ? 'text' : getCurrentScreenContentHint();
+      videoTrack.contentHint = shouldBootstrapBrowserMotion
+        ? 'text'
+        : getCurrentScreenContentHint();
       await applyScreenCaptureConstraints(
         videoTrack,
         shouldBootstrapBrowserMotion ? bootstrapParams : pickedParams,
@@ -737,33 +682,27 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
       screenPubPC = newPC;
       screenPubAbort = abort;
       screenPubStream = stream;
-      screenPubStopped = false;
-      on.onScreenShareSelfStarted({ stream, videoCodec: selectedCodec });
+      on.onScreenShareSelfStarted?.({ stream, videoCodec: selectedCodec });
 
       const videoSender = newPC.addTrack(videoTrack, stream);
       screenPubVideoSender = videoSender;
       if (audioTrack) newPC.addTrack(audioTrack, stream);
 
       const tx = newPC.getTransceivers().find((t) => t.sender === videoSender);
-      if (tx) {
-        applyScreenCodecPreferences(tx, caps, selectedCodec);
-      }
+      if (tx) applyScreenCodecPreferences(tx, caps, selectedCodec);
 
       newPC.addEventListener('icecandidate', (ev) => {
-        if (!ev.candidate || screenPubStopped) return;
-        const cand = ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate;
-        send('candidate', { pc: 'screen-pub', ...cand });
+        if (!ev.candidate || screenPubPC !== newPC) return;
+        send('candidate', { pc: 'screen-pub', ...candidateInit(ev.candidate) });
       });
 
       newPC.addEventListener('connectionstatechange', () => {
         if (newPC.connectionState === 'failed' || newPC.connectionState === 'closed') {
-          if (!screenPubStopped) stopScreenShare();
+          stopScreenShare();
         }
       });
 
-      videoTrack.addEventListener('ended', () => {
-        if (!screenPubStopped) stopScreenShare();
-      });
+      videoTrack.addEventListener('ended', stopScreenShare);
 
       const offer = await newPC.createOffer();
       await newPC.setLocalDescription(offer);
@@ -799,24 +738,15 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     if (!screenPubPC) return;
     screenPubAbort?.abort(new DOMException('Screen share stopped', 'AbortError'));
     screenPubAbort = null;
-    screenPubStopped = true;
     send('screen-share-stop', {});
-    try {
-      screenPubStream?.getTracks().forEach((t) => t.stop());
-    } catch {
-      /* ignore */
-    }
-    try {
-      screenPubPC.close();
-    } catch {
-      /* ignore */
-    }
+    screenPubStream?.getTracks().forEach((t) => t.stop());
+    screenPubPC.close();
     screenPubPC = null;
     screenPubStream = null;
     screenPubToken = null;
     screenPubVideoSender = null;
     screenPubInitialParams = null;
-    on.onScreenShareSelfStopped();
+    on.onScreenShareSelfStopped?.();
   }
 
   function scaledBitrate(track: MediaStreamTrack | undefined, p: ScreenParams): number {
@@ -830,13 +760,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     const sender = screenPubVideoSender;
     const stream = screenPubStream;
     if (!sender || !stream) return;
-    if (screenPubInitialParams) {
-      try {
-        await screenPubInitialParams;
-      } catch {
-        // already logged in the watcher
-      }
-    }
+    if (screenPubInitialParams) await screenPubInitialParams;
     const next = getCurrentScreenParams();
 
     const track = stream.getVideoTracks()[0];
@@ -850,49 +774,20 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   async function changeScreenShareMode(mode: ShareMode): Promise<void> {
     if (!screenPubVideoSender || !screenPubStream) return;
     const track = screenPubStream.getVideoTracks()[0];
-    if (track) {
-      track.contentHint = shareModeToContentHint(mode);
-    }
+    if (track) track.contentHint = shareModeToContentHint(mode);
     const eff = getCurrentScreenParams();
     const next = buildScreenParams(eff.resolution, eff.fps, mode);
-    const sender = screenPubVideoSender;
-    const params = sender.getParameters();
-    if (!params.encodings || params.encodings.length === 0) {
-      params.encodings = [{}];
-    }
-    params.encodings[0] = {
-      ...params.encodings[0],
-      maxBitrate: scaledBitrate(track, next),
-      maxFramerate: next.fps,
-    } as RTCRtpEncodingParameters;
-    try {
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('[sfu] setParameters(mode-change) on screen video failed', err);
-    }
+    await setEncoding(
+      screenPubVideoSender,
+      { maxBitrate: scaledBitrate(track, next), maxFramerate: next.fps },
+      'screen mode-change',
+    );
     send('screen-share-mode-change', { mode });
   }
 
   async function applyScreenEncodeActive(active: boolean): Promise<void> {
-    if (screenPubInitialParams) {
-      try {
-        await screenPubInitialParams;
-      } catch {
-        // already logged in the watcher
-      }
-    }
-    const sender = screenPubVideoSender;
-    if (!sender) return;
-    const params = sender.getParameters();
-    if (!params.encodings || params.encodings.length === 0) {
-      params.encodings = [{}];
-    }
-    params.encodings[0] = { ...params.encodings[0], active };
-    try {
-      await sender.setParameters(params);
-    } catch (err) {
-      console.warn('[sfu] setParameters(active) on screen video failed', err);
-    }
+    if (screenPubInitialParams) await screenPubInitialParams;
+    if (screenPubVideoSender) await setEncoding(screenPubVideoSender, { active }, 'screen active');
   }
 
   function getScreenShareToken(): string | null {
@@ -912,13 +807,11 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     });
     send('screen-share-resume', { sessionToken: token });
 
-    const timeoutId = setTimeout(() => {
-      if (resumeContinuation) {
-        const cont = resumeContinuation;
-        resumeContinuation = null;
-        cont.reject(new Error('sfu-client: screen-share-resume timeout'));
-      }
-    }, 10000);
+    // Settled by screen-share-started or screen-share-error.
+    const timeoutId = setTimeout(
+      () => settleResume(new Error('sfu-client: screen-share-resume timeout')),
+      10000,
+    );
 
     try {
       await settled;
@@ -936,7 +829,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   }
 
   function isPublishingScreenShare(): boolean {
-    return screenPubPC !== null && !screenPubStopped;
+    return screenPubPC !== null;
   }
 
   // ---- Screen share: subscriber ----
@@ -945,7 +838,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     if (screenSubs.has(publisherId)) return;
     const codec = screenShareCodecs.get(publisherId);
     if (codec && !canReceiveScreenCodec(codec)) {
-      on.onScreenShareError({ publisherId, reason: 'internal' });
+      on.onScreenShareError?.({ publisherId, reason: 'internal' });
       return;
     }
     const subPC = new RTCPeerConnection({ iceServers });
@@ -953,7 +846,7 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
 
     subPC.addEventListener('track', (ev) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-      on.onScreenShareTrack({
+      on.onScreenShareTrack?.({
         publisherId,
         track: ev.track,
         stream,
@@ -962,9 +855,9 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     });
 
     subPC.addEventListener('icecandidate', (ev) => {
-      if (!ev.candidate) return;
-      const cand = ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate;
-      send('candidate', { pc: 'screen-sub', publisherId, ...cand });
+      if (ev.candidate) {
+        send('candidate', { pc: 'screen-sub', publisherId, ...candidateInit(ev.candidate) });
+      }
     });
 
     subPC.addEventListener('connectionstatechange', () => {
@@ -986,16 +879,23 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     const subPC = screenSubs.get(publisherId);
     if (!subPC) return;
     screenSubs.delete(publisherId);
-    try {
-      subPC.close();
-    } catch {
-      /* ignore */
-    }
+    subPC.close();
+  }
+
+  function closeScreenSubs(): void {
+    for (const subPC of screenSubs.values()) subPC.close();
+    screenSubs.clear();
   }
 
   // ---- Camera: publisher ----
   // Mirrors the screen-share publisher path: a dedicated camera-pub PC offers,
   // the SFU answers. Single VP8 video track, no audio, no simulcast.
+
+  function watchCameraTrack(track: MediaStreamTrack): void {
+    track.contentHint = 'motion';
+    // stop() does not fire 'ended', so a replaced or released track won't recurse.
+    track.addEventListener('ended', stopCamera);
+  }
 
   async function startCamera(stream: MediaStream): Promise<void> {
     if (cameraPubPC) throw new Error('sfu-client: already publishing camera');
@@ -1004,95 +904,62 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     if (!videoTrack) {
       throw new Error('sfu-client: camera stream has no video track');
     }
-    videoTrack.contentHint = 'motion';
 
     const newPC = new RTCPeerConnection({ iceServers });
     cameraPubPC = newPC;
     cameraPubStream = stream;
-    cameraPubStopped = false;
-    on.onCameraSelfStarted({ stream });
+    on.onCameraSelfStarted?.({ stream });
 
     const videoSender = newPC.addTrack(videoTrack, stream);
     cameraVideoSender = videoSender;
 
     const caps = RTCRtpSender.getCapabilities('video');
     const tx = newPC.getTransceivers().find((t) => t.sender === videoSender);
-    if (tx && caps) {
-      const vp8 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8');
-      if (vp8.length > 0) {
-        try {
-          tx.setCodecPreferences(vp8);
-        } catch (err) {
-          console.warn('[sfu] setCodecPreferences(vp8) on camera failed', err);
-        }
+    const vp8 = caps?.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8') ?? [];
+    if (tx && vp8.length > 0) {
+      try {
+        tx.setCodecPreferences(vp8);
+      } catch (err) {
+        console.warn('[sfu] setCodecPreferences(vp8) on camera failed', err);
       }
     }
 
     newPC.addEventListener('icecandidate', (ev) => {
-      if (!ev.candidate || cameraPubStopped) return;
-      const cand = ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate;
-      send('candidate', { pc: 'camera-pub', ...cand });
+      if (!ev.candidate || cameraPubPC !== newPC) return;
+      send('candidate', { pc: 'camera-pub', ...candidateInit(ev.candidate) });
     });
 
     newPC.addEventListener('connectionstatechange', () => {
       if (newPC.connectionState === 'failed' || newPC.connectionState === 'closed') {
-        if (!cameraPubStopped) stopCamera();
+        if (cameraPubPC === newPC) stopCamera();
       }
     });
 
-    videoTrack.addEventListener('ended', () => {
-      if (!cameraPubStopped) stopCamera();
-    });
+    watchCameraTrack(videoTrack);
 
     const offer = await newPC.createOffer();
     await newPC.setLocalDescription(offer);
     send('camera-start', { sdp: offer.sdp ?? '' });
 
-    try {
-      const params = videoSender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
-      }
-      params.encodings[0] = {
-        ...params.encodings[0],
-        maxBitrate: CAMERA_MAX_BITRATE,
-      } as RTCRtpEncodingParameters;
-      await videoSender.setParameters(params);
-    } catch (err) {
-      console.warn('[sfu] setParameters on camera video failed', err);
-    }
+    await setEncoding(videoSender, { maxBitrate: CAMERA_MAX_BITRATE }, 'camera');
   }
 
   function stopCamera(): void {
     if (!cameraPubPC) return;
-    cameraPubStopped = true;
     send('camera-stop', {});
-    try {
-      cameraPubStream?.getTracks().forEach((t) => t.stop());
-    } catch {
-      /* ignore */
-    }
-    try {
-      cameraPubPC.close();
-    } catch {
-      /* ignore */
-    }
+    cameraPubStream?.getTracks().forEach((t) => t.stop());
+    cameraPubPC.close();
     cameraPubPC = null;
     cameraPubStream = null;
     cameraVideoSender = null;
-    on.onCameraSelfStopped();
+    on.onCameraSelfStopped?.();
   }
 
   // Stop the current camera capture to free the hardware, leaving the
   // publisher PC and sender intact: the sender keeps its (now-ended) track
-  // until replaceCameraTrack swaps in a fresh one. stop() does not fire
-  // 'ended', so the track's listener won't recurse into stopCamera().
+  // until replaceCameraTrack swaps in a fresh one.
   function releaseCameraTrack(): void {
-    try {
-      cameraPubStream?.getTracks().forEach((t) => t.stop());
-    } catch {
-      /* ignore */
-    }
+    cameraPubStream?.getTracks().forEach((t) => t.stop());
   }
 
   // Swap the published camera to a new capture (device change) without a
@@ -1100,31 +967,23 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
   // subscribers see no interruption. The self-preview is refreshed via
   // onCameraSelfStarted and the old capture's tracks are stopped.
   async function replaceCameraTrack(stream: MediaStream): Promise<void> {
-    if (!cameraPubPC || cameraPubStopped || !cameraVideoSender) {
+    if (!cameraPubPC || !cameraVideoSender) {
       throw new Error('sfu-client: not publishing camera');
     }
     const newTrack = stream.getVideoTracks()[0];
     if (!newTrack) {
       throw new Error('sfu-client: camera stream has no video track');
     }
-    newTrack.contentHint = 'motion';
-    newTrack.addEventListener('ended', () => {
-      if (!cameraPubStopped) stopCamera();
-    });
+    watchCameraTrack(newTrack);
     await cameraVideoSender.replaceTrack(newTrack);
     const old = cameraPubStream;
     cameraPubStream = stream;
-    on.onCameraSelfStarted({ stream });
-    // stop() does not fire 'ended', so the old track's listener won't recurse.
-    try {
-      old?.getTracks().forEach((t) => t.stop());
-    } catch {
-      /* ignore */
-    }
+    on.onCameraSelfStarted?.({ stream });
+    old?.getTracks().forEach((t) => t.stop());
   }
 
   function isPublishingCamera(): boolean {
-    return cameraPubPC !== null && !cameraPubStopped;
+    return cameraPubPC !== null;
   }
 
   // ---- Camera: subscriber ----
@@ -1136,13 +995,13 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
 
     subPC.addEventListener('track', (ev) => {
       const stream = ev.streams[0] ?? new MediaStream([ev.track]);
-      on.onCameraTrack({ publisherId, track: ev.track, stream });
+      on.onCameraTrack?.({ publisherId, track: ev.track, stream });
     });
 
     subPC.addEventListener('icecandidate', (ev) => {
-      if (!ev.candidate) return;
-      const cand = ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate;
-      send('candidate', { pc: 'camera-sub', publisherId, ...cand });
+      if (ev.candidate) {
+        send('candidate', { pc: 'camera-sub', publisherId, ...candidateInit(ev.candidate) });
+      }
     });
 
     subPC.addEventListener('connectionstatechange', () => {
@@ -1154,21 +1013,11 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     send('camera-subscribe', { publisherId });
   }
 
-  function unsubscribeCamera(publisherId: string): void {
-    if (!cameraSubs.has(publisherId)) return;
-    send('camera-unsubscribe', { publisherId });
-    teardownCameraSub(publisherId);
-  }
-
   function teardownCameraSub(publisherId: string): void {
     const subPC = cameraSubs.get(publisherId);
     if (!subPC) return;
     cameraSubs.delete(publisherId);
-    try {
-      subPC.close();
-    } catch {
-      /* ignore */
-    }
+    subPC.close();
   }
 
   function setDisplayName(name: string): void {
@@ -1197,26 +1046,17 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
 
   function disconnect(): void {
     stopped = true;
-    if (screenPubPC) stopScreenShare();
-    if (cameraPubPC) stopCamera();
-    for (const id of Array.from(screenSubs.keys())) {
-      teardownScreenSub(id);
-    }
-    for (const id of Array.from(cameraSubs.keys())) {
-      teardownCameraSub(id);
-    }
+    stopScreenShare();
+    closeScreenSubs();
+    stopCamera();
+    for (const subPC of cameraSubs.values()) subPC.close();
+    cameraSubs.clear();
     if (ws) {
       closeWebSocket(ws);
       ws = null;
     }
-    if (pc) {
-      try {
-        pc.close();
-      } catch {
-        /* ignore */
-      }
-      pc = null;
-    }
+    pc?.close();
+    pc = null;
   }
 
   return {
@@ -1242,7 +1082,6 @@ export function createSFUClient(handlers: Partial<SFUHandlers> = {}): SFUClient 
     releaseCameraTrack,
     replaceCameraTrack,
     subscribeCamera,
-    unsubscribeCamera,
     isPublishingCamera,
   };
 }

@@ -198,7 +198,6 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
           display,
           audio,
           sfu,
-          getStore,
           handleChatReceive,
           handleChatDelete,
           peerIdRef,
@@ -223,7 +222,7 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
         client.sendSetState(s.selfMuted, s.deafened);
       }
     },
-    [audio, sfu, handleChatReceive, handleChatDelete, getStore, roomSlug],
+    [audio, sfu, handleChatReceive, handleChatDelete, roomSlug],
   );
 
   useEffect(() => {
@@ -294,9 +293,10 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
         );
 
         if (!denoiserReady) {
-          const pendingGraph = graph;
           void preloadEngine(targetEngine).then(async () => {
-            if (micGraphRef.current !== pendingGraph) return;
+            // Leave (or leave + rejoin) while WASM loaded: don't rebuild on a
+            // torn-down or replaced graph.
+            if (micGraphRef.current !== graph) return;
             const s = useStore.getState();
             if (s.joinState !== 'joined') return;
             if (s.engine !== targetEngine) return;
@@ -376,15 +376,13 @@ export function useSessionManager({ audio, sfu, roomSlug }: UseSessionManagerDep
 
   const updateScreenShareParams = useCallback(async (): Promise<void> => {
     const client = sfu.getClient();
-    if (!client || !client.isPublishingScreenShare()) return;
-    await client.updateScreenShareParams();
+    if (client?.isPublishingScreenShare()) await client.updateScreenShareParams();
   }, [sfu]);
 
   const changeScreenShareMode = useCallback(
     async (mode: ShareMode): Promise<void> => {
       const client = sfu.getClient();
-      if (!client || !client.isPublishingScreenShare()) return;
-      await client.changeScreenShareMode(mode);
+      if (client?.isPublishingScreenShare()) await client.changeScreenShareMode(mode);
     },
     [sfu],
   );

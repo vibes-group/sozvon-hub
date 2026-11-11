@@ -1,6 +1,8 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import type { Attachment } from '../sfu/protocol';
 import { useAttachmentUrl } from '../hooks/useAttachmentUrl';
+import { MediaActions } from './MediaActions';
+import { mediaBoxStyle, type MediaSize } from '../utils/mediaBox';
 
 type Props = {
   attachment: Attachment;
@@ -11,8 +13,6 @@ type Props = {
   fill?: boolean;
 };
 
-const MAX_WIDTH = 320;
-
 export function AttachmentImage({ attachment, roomId, onClick, fill = false }: Props) {
   const { url, status, reload } = useAttachmentUrl(attachment.uploadId, roomId);
   const [loaded, setLoaded] = useState(false);
@@ -22,20 +22,19 @@ export function AttachmentImage({ attachment, roomId, onClick, fill = false }: P
     setLoaded(false);
   }, [url]);
 
-  const aspectRatio =
-    attachment.width && attachment.height
-      ? `${attachment.width} / ${attachment.height}`
-      : undefined;
-  const containerStyle: CSSProperties = {
-    maxWidth: fill ? undefined : MAX_WIDTH,
-    aspectRatio: fill ? undefined : aspectRatio,
-    minHeight: fill || aspectRatio ? undefined : 80,
-  };
-  const containerClass = `group relative overflow-hidden bg-bg-2 ${fill ? 'h-full w-full' : 'block w-full'}`;
+  // Dimensions measured on load, for attachments sent without them.
+  const [natural, setNatural] = useState<MediaSize | null>(null);
+  const containerStyle = fill ? undefined : mediaBoxStyle(attachment, natural);
+  const containerClass = `group overflow-hidden bg-bg-2 ${fill ? 'absolute inset-0' : 'relative'}`;
 
   return (
     <div className={containerClass} style={containerStyle}>
-      <button type="button" onClick={onClick} className="block h-full w-full" aria-label={attachment.name}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="absolute inset-0"
+        aria-label={attachment.name}
+      >
         {attachment.blurThumb ? (
           <img
             src={attachment.blurThumb}
@@ -52,8 +51,12 @@ export function AttachmentImage({ attachment, roomId, onClick, fill = false }: P
           <img
             src={url}
             alt={attachment.name}
-            onLoad={() => setLoaded(true)}
-            className="relative h-full w-full object-cover transition-opacity duration-300"
+            onLoad={(e) => {
+              const { naturalWidth: width, naturalHeight: height } = e.currentTarget;
+              setNatural({ width, height });
+              setLoaded(true);
+            }}
+            className="absolute inset-0 h-full w-full object-cover transition-opacity duration-300"
             style={{ opacity: loaded ? 1 : 0 }}
           />
         )}
@@ -75,6 +78,8 @@ export function AttachmentImage({ attachment, roomId, onClick, fill = false }: P
           </div>
         )}
       </button>
+
+      <MediaActions attachment={attachment} roomId={roomId} />
     </div>
   );
 }

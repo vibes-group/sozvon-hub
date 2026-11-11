@@ -1,0 +1,8 @@
+{
+  "pc": "camera-sub",
+  "publisherId": "11223344aabbccdd",
+  "candidate": "candidate:1 1 UDP 1 1.1.1.1 1 typ host",
+  "sdpMid": "0",
+  "sdpMLineIndex": 0,
+  "usernameFragment": null
+}

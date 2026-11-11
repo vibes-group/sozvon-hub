@@ -35,11 +35,19 @@ const SCREEN_AUDIO_VOLUME_PREFIX = 'sozvon-hub.screen-audio-volume.';
 // Primitive loaders
 // ---------------------------------------------------------------------------
 
-export function loadNumber(key: string, fallback: number): number {
+function loadNumberOrNull(key: string): number | null {
   const raw = localStorage.getItem(key);
-  if (raw === null || raw === '') return fallback;
+  if (raw === null || raw === '') return null;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function loadNumber(key: string, fallback: number): number {
+  return loadNumberOrNull(key) ?? fallback;
+}
+
+export function saveNumber(key: string, v: number): void {
+  localStorage.setItem(key, String(v));
 }
 
 export function loadBoolean(key: string, fallback: boolean): boolean {
@@ -157,7 +165,7 @@ export function removeRecentRoom(slug: string): void {
 // survives reconnects (peer IDs are ephemeral per WS).
 export function loadOrCreateClientId(): string {
   const existing = localStorage.getItem(KEYS.clientId);
-  if (existing && existing.length > 0) return existing;
+  if (existing) return existing;
   const fresh = crypto.randomUUID();
   localStorage.setItem(KEYS.clientId, fresh);
   return fresh;
@@ -168,11 +176,7 @@ export function loadOrCreateClientId(): string {
 // ---------------------------------------------------------------------------
 
 export function loadPeerVolume(clientId: string): number | null {
-  if (!clientId) return null;
-  const raw = localStorage.getItem(PEER_VOLUME_PREFIX + clientId);
-  if (raw === null || raw === '') return null;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  return clientId ? loadNumberOrNull(PEER_VOLUME_PREFIX + clientId) : null;
 }
 
 export function savePeerVolume(clientId: string, volume: number): void {
@@ -181,11 +185,7 @@ export function savePeerVolume(clientId: string, volume: number): void {
 }
 
 export function loadScreenAudioVolume(clientId: string): number | null {
-  if (!clientId) return null;
-  const raw = localStorage.getItem(SCREEN_AUDIO_VOLUME_PREFIX + clientId);
-  if (raw === null || raw === '') return null;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  return clientId ? loadNumberOrNull(SCREEN_AUDIO_VOLUME_PREFIX + clientId) : null;
 }
 
 export function saveScreenAudioVolume(clientId: string, volume: number): void {
@@ -196,14 +196,6 @@ export function saveScreenAudioVolume(clientId: string, volume: number): void {
 // ---------------------------------------------------------------------------
 // Audio / engine / devices
 // ---------------------------------------------------------------------------
-
-export function saveSendVolume(v: number): void {
-  localStorage.setItem(KEYS.sendVolume, String(v));
-}
-
-export function saveOutputVolume(v: number): void {
-  localStorage.setItem(KEYS.outputVolume, String(v));
-}
 
 const ENGINE_VALUES: EngineKind[] = ['off', ...ENGINE_IDS];
 
@@ -220,8 +212,7 @@ export function saveEngine(e: EngineKind): void {
 }
 
 export function loadMicDeviceId(): string | null {
-  const raw = localStorage.getItem(KEYS.micDeviceId);
-  return raw && raw.length > 0 ? raw : null;
+  return localStorage.getItem(KEYS.micDeviceId) || null;
 }
 
 export function saveMicDeviceId(id: string | null): void {
@@ -239,8 +230,7 @@ export function saveSpeakerDeviceId(id: string | null): void {
 }
 
 export function loadCamDeviceId(): string | null {
-  const raw = localStorage.getItem(KEYS.camDeviceId);
-  return raw && raw.length > 0 ? raw : null;
+  return localStorage.getItem(KEYS.camDeviceId) || null;
 }
 
 export function saveCamDeviceId(id: string | null): void {

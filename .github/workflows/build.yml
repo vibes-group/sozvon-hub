@@ -16,7 +16,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -24,17 +24,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          workspaces: backend
 
+      # rustup reads backend/rust-toolchain.toml and installs the pinned toolchain.
       - name: Backend checks
         working-directory: backend
         run: |
-          go vet ./...
-          go build ./...
-          go test ./...
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -46,11 +46,11 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npm run build
+          npm run typecheck
           npm test
 
+  # Runs alongside test; write-env waits for both, so an untested image never deploys.
   build:
-    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -129,7 +129,7 @@ jobs:
           category: trivy-image
 
   write-env:
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

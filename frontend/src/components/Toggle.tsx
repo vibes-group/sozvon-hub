@@ -15,7 +15,6 @@ export function Toggle({
       aria-label={ariaLabel}
       onClick={onChange}
       className="vh-toggle"
-      data-checked={checked}
     >
       <span className="vh-toggle-dot" />
     </button>

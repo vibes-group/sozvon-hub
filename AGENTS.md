@@ -23,7 +23,7 @@ Repository is **public**. Every commit is visible.
 
 ## Architecture
 
-- Quick video calls, Jitsi-like. Pion WebRTC SFU embedded in the Go process,
+- Quick video calls, Jitsi-like. str0m WebRTC SFU embedded in the Rust process,
   JSON-over-WebSocket signaling. Audio (Opus + RNNoise), camera video, screen
   share.
 - Accounts are invite-only (register via a link from an existing user). Only
