@@ -6,20 +6,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.hoisted(() => {
   const memoryStore = new Map<string, string>();
-  (globalThis as { localStorage?: unknown }).localStorage = {
-    getItem: (k: string) => memoryStore.get(k) ?? null,
-    setItem: (k: string, v: string) => {
-      memoryStore.set(k, v);
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: (k: string) => memoryStore.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        memoryStore.set(k, v);
+      },
+      removeItem: (k: string) => {
+        memoryStore.delete(k);
+      },
+      clear: () => memoryStore.clear(),
+      key: (i: number) => Array.from(memoryStore.keys())[i] ?? null,
+      get length() {
+        return memoryStore.size;
+      },
     },
-    removeItem: (k: string) => {
-      memoryStore.delete(k);
-    },
-    clear: () => memoryStore.clear(),
-    key: (i: number) => Array.from(memoryStore.keys())[i] ?? null,
-    get length() {
-      return memoryStore.size;
-    },
-  };
+  });
 });
 
 vi.mock('../screenshare/codec', () => ({
